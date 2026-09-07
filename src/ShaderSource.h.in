@@ -1,0 +1,4 @@
+#pragma once
+inline constexpr char FilterShaderSource[] = R"PAPERSHADE(
+@FILTER_SHADER@
+)PAPERSHADE";

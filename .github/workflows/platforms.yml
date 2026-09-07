@@ -1,0 +1,126 @@
+name: Native platform builds
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**/*.md"]
+  pull_request:
+    paths-ignore: ["**/*.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: x64
+            target: x64
+          - runner: windows-11-arm
+            arch: arm64
+            target: ARM64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify native host
+        run: |
+          $native = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+          if ($native -ne '${{ matrix.arch }}') { throw "Unexpected runner architecture: $native" }
+      - name: Configure available Visual Studio
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $version = & $vswhere -latest -products '*' -property installationVersion
+          if (-not $version) { throw 'Visual Studio was not found.' }
+          $major = ([version]$version).Major
+          $generator = switch ($major) {
+            17 { 'Visual Studio 17 2022' }
+            18 { 'Visual Studio 18 2026' }
+            default { throw "Unsupported Visual Studio major version: $major" }
+          }
+          cmake -S . -B 'build\${{ matrix.arch }}' -G $generator -A '${{ matrix.target }}' -DPAPERSHADE_TEST_WARP=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build native executable
+        run: cmake --build 'build\${{ matrix.arch }}' --config Release --parallel 2
+      - name: Test shared math and reference GPU shader
+        run: ctest --test-dir 'build\${{ matrix.arch }}' -C Release --output-on-failure
+      - name: Package Windows build
+        run: .\tools\Package.ps1 -Architectures '${{ matrix.arch }}'
+      - name: Upload portable application
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: PaperShade-windows-${{ matrix.arch }}
+          path: dist/PaperShade-*-windows-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x86_64
+            package: x86_64
+          - runner: macos-15
+            arch: arm64
+            package: universal
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify native host and SDK
+        run: |
+          test "$(uname -m)" = "${{ matrix.arch }}"
+          xcodebuild -version
+          swift --version
+      - name: Test the same portable C++ filter core
+        run: |
+          cmake -S . -B build/macos-core -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/macos-core --parallel 2
+          ctest --test-dir build/macos-core --output-on-failure
+      - name: Build and test native Swift and Metal implementation
+        run: swift test --configuration release
+      - name: Package the native application
+        run: bash macOS/build.sh --arch "${{ matrix.package }}"
+      - name: Verify executable architectures and signature
+        run: |
+          binary="dist/PaperShade.app/Contents/MacOS/PaperShade"
+          if [ "${{ matrix.package }}" = universal ]; then
+            lipo -verify_arch arm64 x86_64 "$binary"
+          else
+            lipo -verify_arch "${{ matrix.arch }}" "$binary"
+          fi
+          codesign --verify --deep --strict --verbose=2 dist/PaperShade.app
+      - name: Smoke-test the bundle without requesting screen access
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          binary = "dist/PaperShade.app/Contents/MacOS/PaperShade"
+          subprocess.run([binary, "--version"], check=True, timeout=30)
+          subprocess.run([binary, "--smoke-test"], check=True, timeout=30)
+          PY
+      - name: Upload macOS application
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: PaperShade-macos-${{ matrix.package }}
+          path: dist/PaperShade-*-macos-${{ matrix.package }}.zip
+          if-no-files-found: error
+          retention-days: 30

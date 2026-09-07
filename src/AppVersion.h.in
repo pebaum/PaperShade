@@ -1,0 +1,2 @@
+#pragma once
+inline constexpr wchar_t PaperShadeVersion[] = L"@PROJECT_VERSION@";

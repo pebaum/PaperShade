@@ -1,0 +1,37 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "arm64",
+      "displayName": "Native Windows ARM64",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "ARM64",
+      "binaryDir": "${sourceDir}/build/arm64"
+    },
+    {
+      "name": "x64",
+      "displayName": "Native Windows x64",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/x64"
+    }
+  ],
+  "buildPresets": [
+    { "name": "arm64", "configurePreset": "arm64", "configuration": "Release" },
+    { "name": "x64", "configurePreset": "x64", "configuration": "Release" }
+  ],
+  "testPresets": [
+    {
+      "name": "arm64",
+      "configurePreset": "arm64",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "x64",
+      "configurePreset": "x64",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}
