@@ -12,7 +12,7 @@ audio capture.
 2. Open the app. A new profile starts **paused**; find the half-shaded circle in
    the menu bar. Previously chosen settings, including an explicit enable, are
    restored using UserDefaults.
-3. Choose **Enable PaperShade**, or **Grant Screen Recording Access**.
+3. Choose **Enable PaperShade**, select a **Style**, or use **Grant Screen Recording Access**.
    Only these explicit user actions can request macOS consent.
 4. In **System Settings → Privacy & Security → Screen Recording**, enable
    PaperShade. Newer macOS releases may call this **Screen & System Audio
@@ -31,7 +31,7 @@ the terminal instead; use the packaged app for normal use.
 | --- | --- |
 | Control–Option–G | Toggle enabled/paused |
 | Control–Option–Shift–G | Always pause, including during startup |
-| Style | All 12 preset IDs match the Windows/shared core |
+| Style | All 12 preset IDs match the Windows/shared core; selecting a style enables it |
 | Frame Rate | 10, **15 default**, 30, or 60 fps |
 | Dither Pattern Size | **1 backing pixel** accurate PS1; 2–4 enlarged artistic patterns |
 | Start at Login | Explicit opt-in through `SMAppService`; approval may be needed in Login Items |
@@ -55,17 +55,21 @@ Unlike the Windows matrix path, **all Mac styles require GPU screen capture**.
   Texture reads use integer destination coordinates without filtering.
 - The current application is excluded with `SCContentFilter`, covering all
   overlay windows. Failure to identify/exclude it aborts capture safely.
-  `NSWindow.sharingType` is only an additional defense.
+  Self-exclusion does not rely on `NSWindow.sharingType`; windows remain
+  enumerable so ScreenCaptureKit can identify the current application.
 - Frames must be complete and correctly sized. Cursor capture is disabled so
   the actual cursor stays responsive. Static/idle frames cause no redraw loop.
 - Each stream uses `minimumFrameInterval`, queue depth 3 and at most one GPU
   command in flight. Other frames are dropped under backpressure. There is one
   render pass, with an IOSurface/CVMetalTextureCache source and no CPU readback.
   Pixel-buffer/texture ownership continues through GPU completion.
-- Overlays remain hidden until their first successfully rendered frame. Pause,
+- Empty transparent windows are ordered before capture to make Metal drawables
+  available; no filtered content covers the desktop until a frame is rendered. Pause,
   quit, errors, sleep, session switching and monitor changes immediately hide
   and release them. Startup generations/cancellation prevent stale work from
   reopening them. Wake/topology changes use one-shot debounce, not polling.
+  Stream suspension preserves the enabled preference and can resume after
+  normal session/display wake or activation of a regular application.
 - Each overlay joins Spaces and supports fullscreen auxiliary placement;
   system-controlled fullscreen/secure surfaces and other unusually elevated
   windows can remain unfiltered. The overlay stays below system menus.

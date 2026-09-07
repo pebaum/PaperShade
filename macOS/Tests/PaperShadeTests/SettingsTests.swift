@@ -75,6 +75,20 @@ final class SettingsTests: XCTestCase {
         }
     }
 
+    func testMalformedSavedPreferencesPauseAndReportWarning() throws {
+        try withStore { store, defaults in
+            defaults.set(true, forKey: SettingsStore.Key.enabled)
+            defaults.set(144, forKey: SettingsStore.Key.frameCap)
+            let settings = store.load()
+            XCTAssertFalse(settings.enabled)
+            XCTAssertEqual(settings.framesPerSecond, 15)
+            XCTAssertNotNil(store.lastLoadWarning)
+            store.save(FilterSettings())
+            XCTAssertEqual(store.load(), FilterSettings())
+            XCTAssertNil(store.lastLoadWarning)
+        }
+    }
+
     private func withStore(_ body: (SettingsStore, UserDefaults) throws -> Void) throws {
         let name = "com.pebaum.PaperShade.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))

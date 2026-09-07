@@ -89,7 +89,7 @@ public final class SettingsStore {
             || (defaults.object(forKey: Key.frameCap) != nil && !validFrameCap)
             || (defaults.object(forKey: Key.pixelSize) != nil && !validPixelSize)
             || (defaults.object(forKey: Key.enabled) != nil && !validEnabled)
-        lastLoadWarning = invalid ? "Invalid saved preferences were repaired using supported defaults. PaperShade starts paused." : nil
+        lastLoadWarning = invalid ? "Invalid saved preferences were ignored and supported defaults were loaded. PaperShade starts paused." : nil
         if let lastLoadWarning { NSLog("PaperShade: %@", lastLoadWarning) }
         return FilterSettings(
             preset: preset,

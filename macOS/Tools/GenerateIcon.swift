@@ -23,6 +23,7 @@ func render(size: Int) throws -> Data {
     }
     let context = graphics.cgContext
     context.scaleBy(x: CGFloat(size) / 512, y: CGFloat(size) / 512)
+    context.clear(CGRect(x: 0, y: 0, width: 512, height: 512))
     context.setFillColor(gray(0.12))
     context.addPath(CGPath(roundedRect: CGRect(x: 22, y: 22, width: 468, height: 468),
                            cornerWidth: 106, cornerHeight: 106, transform: nil))

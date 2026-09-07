@@ -8,7 +8,7 @@ private let paperShadeHotKeyHandler: EventHandlerUPP = { _, event, context in
     var identifier = EventHotKeyID()
     let status = GetEventParameter(
         event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
-        nil, UInt32(MemoryLayout<EventHotKeyID>.size), nil, &identifier
+        nil, MemoryLayout<EventHotKeyID>.size, nil, &identifier
     )
     guard status == noErr, identifier.signature == paperShadeHotKeySignature else {
         return OSStatus(eventNotHandledErr)

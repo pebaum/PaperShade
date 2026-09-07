@@ -52,7 +52,7 @@ and the PaperShade Start menu shortcut.
 ## Run on macOS
 
 Extract the macOS universal package and copy **PaperShade.app** to
-**Applications** before granting permissions. Launch it and use the paper icon
+**Applications** before granting permissions. Launch it and use the half-shaded circle
 in the menu bar; it does not add a normal Dock window. First launch is paused.
 Enable a style and grant **Screen Recording** access to PaperShade in
 **System Settings > Privacy & Security** when macOS requests it. Some macOS
