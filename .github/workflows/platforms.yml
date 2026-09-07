@@ -104,9 +104,9 @@ jobs:
         run: |
           binary="dist/PaperShade.app/Contents/MacOS/PaperShade"
           if [ "${{ matrix.package }}" = universal ]; then
-            lipo -verify_arch arm64 x86_64 "$binary"
+            lipo "$binary" -verify_arch arm64 x86_64
           else
-            lipo -verify_arch "${{ matrix.arch }}" "$binary"
+            lipo "$binary" -verify_arch "${{ matrix.arch }}"
           fi
           codesign --verify --deep --strict --verbose=2 dist/PaperShade.app
       - name: Smoke-test the bundle without requesting screen access
