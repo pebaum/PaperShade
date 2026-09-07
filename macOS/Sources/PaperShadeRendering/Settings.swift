@@ -76,15 +76,13 @@ public final class SettingsStore {
     public func load() -> FilterSettings {
         let rawPreset = integer(forKey: Key.preset).flatMap { Int32(exactly: $0) }
         let preset = rawPreset.flatMap(Preset.init(rawValue:)) ?? .natural
-        let enabledNumber = defaults.object(forKey: Key.enabled) as? NSNumber
-        let enabled = enabledNumber.map {
-            CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue
-        } ?? false
+        let storedEnabled = boolean(forKey: Key.enabled)
+        let enabled = storedEnabled ?? false
         let frameCap = integer(forKey: Key.frameCap)
         let pixelSize = integer(forKey: Key.pixelSize)
         let validFrameCap = frameCap.map(FilterSettings.isValidFrameCap) ?? false
         let validPixelSize = pixelSize.map { FilterSettings.patternSizes.contains($0) } ?? false
-        let validEnabled = enabledNumber.map { CFGetTypeID($0) == CFBooleanGetTypeID() } ?? false
+        let validEnabled = storedEnabled != nil
         let invalid = (defaults.object(forKey: Key.preset) != nil && rawPreset.flatMap(Preset.init(rawValue:)) == nil)
             || (defaults.object(forKey: Key.frameCap) != nil && !validFrameCap)
             || (defaults.object(forKey: Key.pixelSize) != nil && !validPixelSize)
@@ -114,6 +112,15 @@ public final class SettingsStore {
         guard value.isFinite, value.rounded(.towardZero) == value,
               value >= Double(Int32.min), value <= Double(Int32.max) else { return nil }
         return Int(value)
+    }
+
+    private func boolean(forKey key: String) -> Bool? {
+        guard let number = defaults.object(forKey: key) as? NSNumber else { return nil }
+        // CFPreferences can coalesce equal NSNumber(1) and Bool(true) writes without
+        // changing the stored type. Accept only the canonical numeric/boolean 0 and 1.
+        let value = number.doubleValue
+        guard value == 0 || value == 1 else { return nil }
+        return value == 1
     }
 }
 

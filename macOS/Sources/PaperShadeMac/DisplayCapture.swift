@@ -197,7 +197,7 @@ final class DisplayCapture {
         }
     }
 
-    func start(captureDisplay: SCDisplay, excluding application: SCRunningApplication) async throws {
+    func start(captureDisplay: SCDisplay, excluding applications: [SCRunningApplication]) async throws {
         guard !invalidated, !Task.isCancelled else { throw CancellationError() }
         let configuration = SCStreamConfiguration()
         configuration.width = display.width
@@ -209,7 +209,7 @@ final class DisplayCapture {
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(settings.framesPerSecond))
         configuration.queueDepth = 3
         let filter = SCContentFilter(
-            display: captureDisplay, excludingApplications: [application], exceptingWindows: []
+            display: captureDisplay, excludingApplications: applications, exceptingWindows: []
         )
         let stream = SCStream(filter: filter, configuration: configuration, delegate: output)
         self.stream = stream

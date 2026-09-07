@@ -178,13 +178,17 @@ final class CaptureController {
             throw RenderingError("PaperShade could not exclude its own application from capture. " +
                 "No overlays were enabled; try again after reopening the app.")
         }
+        let excludedApplications = content.applications.filter { candidate in
+            candidate.processID == application.processID ||
+                (Bundle.main.bundleIdentifier.map { identifier in candidate.bundleIdentifier == identifier } ?? false)
+        }
         let currentCaptures = captures
         for capture in currentCaptures {
             guard isCurrent(token), !Task.isCancelled else { throw CancellationError() }
             guard let display = content.displays.first(where: { $0.displayID == capture.display.id }) else {
                 throw RenderingError("Display topology changed during startup. Enable PaperShade again.")
             }
-            try await capture.start(captureDisplay: display, excluding: application)
+            try await capture.start(captureDisplay: display, excluding: excludedApplications)
             guard isCurrent(token), !Task.isCancelled else { throw CancellationError() }
         }
     }

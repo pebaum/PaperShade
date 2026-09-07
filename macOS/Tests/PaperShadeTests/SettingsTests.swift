@@ -89,6 +89,22 @@ final class SettingsTests: XCTestCase {
         }
     }
 
+    func testBooleanAndNumericZeroOneRemainInteroperable() throws {
+        try withStore { store, defaults in
+            store.save(FilterSettings())
+            defaults.set(1, forKey: SettingsStore.Key.enabled)
+            defaults.set(true, forKey: SettingsStore.Key.enabled)
+            XCTAssertTrue(store.load().enabled)
+            XCTAssertNil(store.lastLoadWarning)
+            defaults.set(0, forKey: SettingsStore.Key.enabled)
+            XCTAssertFalse(store.load().enabled)
+            XCTAssertNil(store.lastLoadWarning)
+            defaults.set(2, forKey: SettingsStore.Key.enabled)
+            XCTAssertFalse(store.load().enabled)
+            XCTAssertNotNil(store.lastLoadWarning)
+        }
+    }
+
     private func withStore(_ body: (SettingsStore, UserDefaults) throws -> Void) throws {
         let name = "com.pebaum.PaperShade.tests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))

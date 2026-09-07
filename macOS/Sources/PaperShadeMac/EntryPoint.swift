@@ -19,6 +19,13 @@ struct PaperShadeMain {
             fputs("Unknown option. Use --help.\n", stderr)
             exit(EXIT_FAILURE)
         }
+        if !smokeTest, let identifier = Bundle.main.bundleIdentifier,
+           NSRunningApplication.runningApplications(withBundleIdentifier: identifier).contains(where: {
+               $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
+           }) {
+            print("PaperShade is already running in the menu bar.")
+            return
+        }
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         let controller = AppController(smokeTest: smokeTest)
