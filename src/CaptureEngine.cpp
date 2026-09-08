@@ -74,6 +74,19 @@ struct ScopedDpiAwareness {
 
 LRESULT CALLBACK OverlayProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) noexcept {
     switch (message) {
+    case WM_NCCREATE: {
+        const auto* creation = reinterpret_cast<const CREATESTRUCTW*>(lparam);
+        SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(creation->lpCreateParams));
+        return TRUE;
+    }
+    case WM_DISPLAYCHANGE:
+    case WM_DPICHANGED: {
+        const auto owner = reinterpret_cast<HWND>(GetWindowLongPtrW(window, GWLP_USERDATA));
+        if (owner && !PostMessageW(owner, CaptureTopologyMessage, 0, 0)) {
+            OutputDebugStringW(L"PaperShade: could not deliver the overlay topology notification.\n");
+        }
+        return 0;
+    }
     case WM_NCHITTEST:
         return HTTRANSPARENT;
     case WM_MOUSEACTIVATE:
@@ -440,6 +453,7 @@ struct CaptureEngine::Impl {
     Clock::duration interval{};
     CaptureStats stats;
     std::wstring error;
+    HRESULT failureCode = S_OK;
     winrt::com_ptr<IDXGIFactory2> factory;
     std::vector<std::shared_ptr<AdapterResources>> adapters;
     std::vector<std::unique_ptr<MonitorCapture>> monitors;
@@ -491,6 +505,7 @@ struct CaptureEngine::Impl {
         const HWND destination = owner;
         Stop();
         auto detail = DescribeFailure(failure);
+        failureCode = detail.code;
         error = L"Advanced display capture failed: " + detail.text;
         if (!asynchronous || !destination ||
             !PostMessageW(destination, CaptureFailureMessage, 0, 0)) {
@@ -523,7 +538,7 @@ struct CaptureEngine::Impl {
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOREDIRECTIONBITMAP;
         monitor.overlay = CreateWindowExW(style, windowClass.c_str(), L"PaperShade display filter",
             WS_POPUP, bounds.left, bounds.top, bounds.right - bounds.left,
-            bounds.bottom - bounds.top, nullptr, nullptr, module, nullptr);
+            bounds.bottom - bounds.top, nullptr, nullptr, module, owner);
         CheckWindow(monitor.overlay != nullptr, L"Cannot create a nonactivating display overlay.");
         CheckWindow(SetLayeredWindowAttributes(monitor.overlay, 0, 255, LWA_ALPHA),
             L"Cannot configure the display overlay for fully opaque, click-through composition.");
@@ -587,6 +602,7 @@ struct CaptureEngine::Impl {
     void Start(HWND window, const Settings& settings) {
         Stop();
         error.clear();
+        failureCode = S_OK;
         DWORD process = 0;
         const DWORD thread = GetWindowThreadProcessId(window, &process);
         if (!window || thread != GetCurrentThreadId() || process != GetCurrentProcessId()) {
@@ -872,10 +888,34 @@ struct CaptureEngine::Impl {
         notifications->Finish(deferredFrames);
     }
 
+    bool TopologyChanged() const {
+        DisplayEnumeration current;
+        if (!EnumDisplayMonitors(nullptr, nullptr, CollectDisplay, reinterpret_cast<LPARAM>(&current)) ||
+            current.failure) {
+            throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_RETRY),
+                L"The monitor topology is changing. Reconnecting display capture.");
+        }
+        if (current.displays.size() != monitors.size()) return true;
+        return std::any_of(current.displays.begin(), current.displays.end(), [this](const Display& display) {
+            return std::none_of(monitors.begin(), monitors.end(), [&display](const auto& monitor) {
+                return display.monitor == monitor->display.monitor &&
+                    EqualRect(&display.bounds, &monitor->display.bounds);
+            });
+        });
+    }
+
     void Process(bool fromTimer) {
         CollectSignals(fromTimer);
+        if (!factory->IsCurrent()) {
+            throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_RETRY),
+                L"The graphics adapter topology changed. Reconnecting display capture.");
+        }
         for (const auto& monitor : monitors) {
             if (monitor->closed) {
+                if (TopologyChanged()) {
+                    throw winrt::hresult_error(HRESULT_FROM_WIN32(ERROR_RETRY),
+                        L"A captured monitor changed or was removed. Reconnecting display capture.");
+                }
                 throw winrt::hresult_error(RO_E_CLOSED,
                     winrt::hstring(monitor->display.name +
                         L": Windows closed the monitor capture. The filter has been stopped."));
@@ -968,6 +1008,18 @@ CaptureStats CaptureEngine::Stats() const {
 
 std::wstring CaptureEngine::LastError() const {
     return impl_->error;
+}
+
+HRESULT CaptureEngine::LastFailureCode() const noexcept {
+    return impl_->failureCode;
+}
+
+bool IsRecoverableDisplayError(HRESULT code) noexcept {
+    return code == HRESULT_FROM_WIN32(ERROR_RETRY) ||
+        code == HRESULT_FROM_WIN32(ERROR_NOT_FOUND) ||
+        code == DXGI_ERROR_DEVICE_REMOVED || code == DXGI_ERROR_DEVICE_RESET ||
+        code == DXGI_ERROR_ACCESS_LOST || code == DXGI_ERROR_SESSION_DISCONNECTED ||
+        code == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
 }
 
 }
