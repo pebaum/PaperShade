@@ -64,7 +64,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: PaperShade-windows-${{ matrix.arch }}
-          path: dist/PaperShade-*-windows-${{ matrix.arch }}.zip
+          path: |
+            dist/PaperShade-*-windows-${{ matrix.arch }}.zip
+            dist/PaperShade-*-windows-${{ matrix.arch }}.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -117,10 +119,29 @@ jobs:
           subprocess.run([binary, "--version"], check=True, timeout=30)
           subprocess.run([binary, "--smoke-test"], check=True, timeout=30)
           PY
+      - name: Verify drag-and-drop installer contents
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          image="dist/PaperShade-$version-macos-${{ matrix.package }}.dmg"
+          mountpoint="$(mktemp -d)"
+          cleanup() {
+            result=$?
+            hdiutil detach "$mountpoint"
+            rmdir "$mountpoint"
+            exit "$result"
+          }
+          hdiutil attach -readonly -nobrowse -mountpoint "$mountpoint" "$image"
+          trap cleanup EXIT
+          test -d "$mountpoint/PaperShade.app"
+          test -L "$mountpoint/Applications"
+          test "$(readlink "$mountpoint/Applications")" = /Applications
+          codesign --verify --deep --strict "$mountpoint/PaperShade.app"
       - name: Upload macOS application
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: PaperShade-macos-${{ matrix.package }}
-          path: dist/PaperShade-*-macos-${{ matrix.package }}.zip
+          path: |
+            dist/PaperShade-*-macos-${{ matrix.package }}.zip
+            dist/PaperShade-*-macos-${{ matrix.package }}.dmg
           if-no-files-found: error
           retention-days: 30

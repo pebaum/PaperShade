@@ -37,6 +37,7 @@ export MACOSX_DEPLOYMENT_TARGET=13.0
 export CLANG_MODULE_CACHE_PATH="$ROOT/.build/macos-module-cache"
 APP="$ROOT/dist/PaperShade.app"
 ZIP="$ROOT/dist/PaperShade-$VERSION-macos-$ARCH.zip"
+DMG="$ROOT/dist/PaperShade-$VERSION-macos-$ARCH.dmg"
 ICONSET="$ROOT/.build/macos-packaging/PaperShade.iconset"
 
 build_arch() {
@@ -85,4 +86,16 @@ chmod 644 "$APP/Contents/Info.plist" "$APP/Contents/PkgInfo" "$APP/Contents/Reso
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
 rm -f "$ZIP"
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
-printf '\nBuilt %s\nPackaged %s\nAd-hoc signed only; not notarized.\n' "$APP" "$ZIP"
+
+DMG_STAGE="$(mktemp -d "$ROOT/.build/macos-dmg.XXXXXX")"
+cleanup_dmg_stage() {
+    # mktemp created this exact packaging directory; never remove a parent directory.
+    rm -rf -- "$DMG_STAGE"
+}
+trap cleanup_dmg_stage EXIT
+/usr/bin/ditto "$APP" "$DMG_STAGE/PaperShade.app"
+ln -s /Applications "$DMG_STAGE/Applications"
+/usr/bin/hdiutil create -volname PaperShade -srcfolder "$DMG_STAGE" \
+    -format UDZO -ov "$DMG"
+/usr/bin/hdiutil verify "$DMG"
+printf '\nBuilt %s\nPackaged %s\nInstaller %s\nAd-hoc signed only; not notarized.\n' "$APP" "$ZIP" "$DMG"

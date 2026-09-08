@@ -19,6 +19,8 @@ foreach ($architecture in $Architectures) {
     }
     & cmake --install $build --config Release --prefix $package
     if ($LASTEXITCODE -ne 0) { throw "Packaging $architecture failed." }
+    Copy-Item -LiteralPath (Join-Path $package 'PaperShade.exe') `
+        -Destination (Join-Path $distribution "PaperShade-$version-windows-$architecture.exe") -Force
     Compress-Archive -LiteralPath @(
         (Join-Path $package 'PaperShade.exe'),
         (Join-Path $package 'README.md'),
@@ -27,7 +29,7 @@ foreach ($architecture in $Architectures) {
 }
 
 $sourcePaths = @(
-    'src', 'core', 'tests', 'tools', 'macOS', 'Package.swift',
+    'src', 'core', 'tests', 'tools', 'docs', 'macOS', 'Package.swift',
     'CMakeLists.txt', 'CMakePresets.json', 'README.md', 'VERSION',
     '.github', '.gitattributes', '.gitignore'
 ) | ForEach-Object { Join-Path $root $_ }

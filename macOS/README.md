@@ -7,8 +7,9 @@ audio capture.
 
 ## Use and permission
 
-1. Extract `PaperShade-<version>-macos-<arch>.zip` and move `PaperShade.app` to
-   Applications. `universal` contains both `arm64` and `x86_64`.
+1. Open `PaperShade-<version>-macos-universal.dmg` and drag PaperShade to the
+   Applications shortcut. The ZIP package is also available. `universal`
+   contains both `arm64` and `x86_64`.
 2. Open the app. A new profile starts **paused**; find the half-shaded circle in
    the menu bar. Previously chosen settings, including an explicit enable, are
    restored using UserDefaults.
@@ -113,6 +114,8 @@ Build outputs:
 - `dist/PaperShade.app`: bundled app with generated native icon and version from
   the root `VERSION`
 - `dist/PaperShade-<version>-macos-<arch>.zip`: `ditto` archive preserving the app
+- `dist/PaperShade-<version>-macos-<arch>.dmg`: drag-and-drop installer with an
+  Applications shortcut
 
 System tools generate the icon, `lipo` joins universal slices, and `codesign`
 ad-hoc signs and verifies the result. No package dependencies or downloaded
