@@ -381,6 +381,9 @@ private:
             text << L"Engine: " << (CanRun() && !IsNeutralOriginal(settings_.preset, settings_.temperatureKelvin)
                 ? L"Windows compositor color matrix (no app render loop)" : L"idle / no color processing");
         }
+        text << L"\nReported errors: " << errors_;
+        const auto captureError = capture_.LastError();
+        if (!captureError.empty()) text << L"\nLast capture error: " << captureError;
         text << L"\n\nLeft-click icon: toggle. Right-click: styles and settings."
              << L"\nCtrl+Alt+Shift+G: always pause."
              << L"\n\nAdvanced filters process SDR desktop pixels locally. No recordings, network, or telemetry."
