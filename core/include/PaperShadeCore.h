@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-/* Stable 48-byte layout shared with HLSL and Metal constant buffers. */
+/* Version 1.2: 64-byte layout shared with HLSL and Metal constant buffers. */
 typedef struct PSFilterParameters {
     float red;
     float green;
@@ -21,6 +21,10 @@ typedef struct PSFilterParameters {
     int32_t padding0;
     int32_t padding1;
     int32_t padding2;
+    float warmthRed;
+    float warmthGreen;
+    float warmthBlue;
+    float warmthPadding;
 } PSFilterParameters;
 
 typedef struct PSPixel {
@@ -33,7 +37,10 @@ typedef struct PSPixel {
 /* Validation functions return 1 on success and 0 without modifying outputs on failure. */
 uint32_t PSPresetCount(void);
 int32_t PSValidFrameCap(uint32_t fps);
+int32_t PSValidTemperature(uint32_t kelvin);
 int32_t PSGetFilterParameters(int32_t preset, int32_t pixelSize, PSFilterParameters* output);
+int32_t PSGetWarmFilterParameters(int32_t preset, int32_t pixelSize, int32_t kelvin,
+    PSFilterParameters* output);
 int32_t PSReferencePixel(PSPixel input, int32_t x, int32_t y,
     const PSFilterParameters* parameters, PSPixel* output);
 int32_t PSDitherValue(int32_t quantizer, int32_t index, int32_t* output);

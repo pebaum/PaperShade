@@ -8,6 +8,8 @@ cbuffer Filter : register(b0)
     int pixelSize;
     int keepColor;
     int3 padding;
+    float3 warmth;
+    float warmthPadding;
 };
 
 Texture2D<float4> desktop : register(t0);
@@ -46,7 +48,7 @@ float4 PixelMain(float4 position : SV_Position) : SV_Target
         int3 bytes = int3(floor(saturate(color) * 255.0 + 0.5));
         int3 rgb5 = clamp(bytes + ps1[index], 0, 255) >> 3;
         int3 rgb8 = (rgb5 << 3) | (rgb5 >> 2);
-        return float4(float3(rgb8) / 255.0, 1);
+        color = float3(rgb8) / 255.0;
     }
 
     if (quantizer == 1 || quantizer == 2)
@@ -55,5 +57,5 @@ float4 PixelMain(float4 position : SV_Position) : SV_Target
         float steps = float(levels - 1);
         color = saturate(floor(color * steps + 0.5 + threshold) / steps);
     }
-    return float4(color, 1);
+    return float4(saturate(color * warmth), 1);
 }

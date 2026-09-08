@@ -11,16 +11,21 @@ audio capture.
    Applications shortcut. The ZIP package is also available. `universal`
    contains both `arm64` and `x86_64`.
 2. Open the app. A new profile starts **paused**; find the half-shaded circle in
-   the menu bar. Previously chosen settings, including an explicit enable, are
-   restored using UserDefaults.
-3. Choose **Enable PaperShade**, select a **Style**, or use **Grant Screen Recording Access**.
-   Only these explicit user actions can request macOS consent.
+   the menu bar. Previously chosen settings, including an explicit enable and
+   temperature, are restored using UserDefaults. Older preferences without a
+   temperature keep their existing choices and use **6500 K (neutral/off)**.
+   Invalid or malformed saved preferences produce a visible warning and start
+   paused with supported defaults.
+3. Choose **Enable PaperShade**, select a **Style** or **Warmth (Kelvin)**, choose
+   **Warmth only (original colors)**, or use **Grant Screen Recording Access**.
+   Only explicit user actions can request macOS consent. **Original colors at
+   6500 K has no effect: no capture, GPU initialization, or permission is needed.**
 4. In **System Settings → Privacy & Security → Screen Recording**, enable
    PaperShade. Newer macOS releases may call this **Screen & System Audio
    Recording**. Quit and reopen the app if macOS requests it, then enable the
    filter again. The menu contains a link to these settings.
 
-Apple's screen-recording/sharing indicator stays visible. PaperShade does not
+Apple's screen-recording/sharing indicator stays visible during capture. PaperShade does not
 alter privacy preferences, gamma ramps, ICC profiles, or private display APIs.
 Changing an ad-hoc-signed build or moving it can require granting permission
 again. Launching a loose executable with `swift run` can associate consent with
@@ -32,21 +37,45 @@ the terminal instead; use the packaged app for normal use.
 | --- | --- |
 | Control–Option–G | Toggle enabled/paused |
 | Control–Option–Shift–G | Always pause, including during startup |
-| Style | All 12 preset IDs match the Windows/shared core; selecting a style enables it |
+| Style | All 13 preset IDs match the Windows/shared core; IDs 0–11 are unchanged, Original colors is 12; selecting a style enables it |
+| Warmth (Kelvin) | **6500 K neutral/off**, 5500, 4500, 3500, 2700, 2000, 1200; combines with any style |
+| Warmth only (original colors) | Select Original colors and enable; use 3500 K if warmth was neutral, otherwise retain the current temperature |
+| Custom Temperature… | Slider and whole-number Kelvin entry, 1000–6500; apply only on OK, Cancel leaves everything unchanged, invalid text is shown rather than clamped |
 | Frame Rate | 10, **15 default**, 30, or 60 fps |
-| Dither Pattern Size | **1 backing pixel** accurate PS1; 2–4 enlarged artistic patterns |
+| Dither Pattern Size | **1 backing pixel** accurate PS1 at neutral 6500 K; 2–4 enlarged artistic patterns |
 | Start at Login | Explicit opt-in through `SMAppService`; approval may be needed in Login Items |
 | Error / Permission Info | Capture, permission, and shortcut-registration problems |
 
 Carbon global hotkeys do not require Accessibility access. Registration
 conflicts are shown in the menu and Error Info, rather than silently ignored.
-The menu controls always remain available. Start at Login is never enabled
+The two hotkey bindings are unchanged, and the menu controls always remain available. Start at Login is never enabled
 automatically and can be disabled in the app or System Settings.
 
 The first six styles are grayscale transforms (Natural/Rec.709,
 Classic/Rec.601, Average, Paper, High Contrast, Inverted), followed by E-ink
 threshold, Bayer black/white, 4 shades, 16 shades, PS1 grayscale and PS1 color.
-Unlike the Windows matrix path, **all Mac styles require GPU screen capture**.
+Original colors is the thirteenth style: no grayscale or quantization.
+Unlike the Windows matrix path, **all active Mac effects use ScreenCaptureKit +
+Metal**, including warmth alone. The sole no-effect exception is Original
+colors at 6500 K; it preserves the enabled preference but displays an explicit
+no-capture/no-GPU status, distinct from Paused.
+
+### Manual warming
+
+Choose **Warmth only (original colors)** for f.lux-style warmth without
+grayscale, or choose a Kelvin temperature to warm an existing grayscale,
+E-ink, or PS1 style. Applying a warm temperature enables processing. Choosing
+6500 K removes warmth but does not unexpectedly enable a paused grayscale
+filter. The status, menu, tooltip, and About dialog show the current Kelvin.
+
+This is a composable **post-filter white-balance effect**, not automatic
+sunset scheduling, hardware calibration, or a measured monitor white point.
+The shared C++ core computes normalized blackbody RGB gains; 6500 K is exactly
+1/1/1, and lower temperatures only attenuate channels (no brightening relative
+to the selected style). Metal applies these gains **after** grayscale and
+palette/PS1 quantization. Warmth intentionally tints the final palette, so
+warmed PS1 output is **not byte-exact RGB555**. No gamma-ramp, ICC, or private
+display API changes are involved.
 
 ## Capture, performance, and limitations
 
@@ -81,11 +110,13 @@ Unlike the Windows matrix path, **all Mac styles require GPU screen capture**.
   filtered overlay despite PaperShade excluding itself from its own streams.
 - Higher resolution, more displays and higher fps increase GPU/memory/power
   use. Pausing releases streams and overlays. No hidden 60-fps display-link or
-  CPU pixel processing runs while idle.
+  CPU pixel processing runs while idle. Switching to Original at 6500 K also
+  tears down existing capture generations and overlays without starting new ones.
 
 The original PS1 signed 4×4 dither is applied in encoded 8-bit channel space,
 then clamped, shifted to 5 bits and expanded by bit replication. Only pattern
-size 1 is pixel-accurate. Tables and the 48-byte scalar uniform ABI come from
+size 1 at neutral 6500 K preserves pixel-accurate PS1 output. Tables and the
+64-byte scalar uniform ABI, including the trailing warmth gains, come from
 `FilterCore`; Metal fast math and floating-point contraction are disabled.
 
 ## Native builds and tests
@@ -129,12 +160,16 @@ locally. Do not disable Gatekeeper globally. Notarized distribution requires a
 Developer ID certificate, hardened-runtime signing, notarization and stapling
 in a separately configured release process.
 
-Tests exercise every preset/ABI field, malformed settings/C inputs, palette
-and dither goldens, and every 8-bit channel value × 16 dither phases × four
-pattern sizes on the CPU. GPU tests render real Metal textures against the C
-oracle (all quantized output must be exact, especially PS1 RGB; continuous
-grayscale allows one byte for UNORM tie rounding). They also exercise the
-IOSurface texture-cache path. CPU readback is confined to these tests. A
+Tests exercise every preset/ABI field, neutral preference migration, Kelvin
+range/round trips/malformed inputs, enable/no-effect semantics, palette and
+dither goldens, and every 8-bit channel value × 16 dither phases × four pattern
+sizes on the CPU. GPU tests render real Metal textures against the C oracle
+at 6500, 4500, 2700, and 1200 K. Neutral quantized palettes (especially PS1 RGB)
+and neutral Original colors must be byte-exact; continuous grayscale keeps
+its one-byte UNORM tie-rounding allowance. Attenuated warm channels allow only
+one byte for post-warm UNORM rounding. Tests also check warm Original white
+(red > green > blue), no brightening, neutral identity, invalid gains, and the
+real IOSurface texture-cache path. CPU readback is confined to these tests. A
 GPU-less CI skip is not GPU validation; physical-Mac testing is still needed
 for permissions, fullscreen/Spaces, sleep/wake, display hot-plug and end-to-end
 visual behavior.

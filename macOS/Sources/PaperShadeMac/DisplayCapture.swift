@@ -37,7 +37,9 @@ final class CaptureOutput: NSObject, SCStreamOutput, SCStreamDelegate {
         self.layer = layer
         self.renderer = renderer
         self.cache = try renderer.makeTextureCache()
-        self.parameters = try CoreParameters.make(preset: settings.preset, pixelSize: settings.pixelSize)
+        self.parameters = try CoreParameters.make(
+            preset: settings.preset, pixelSize: settings.pixelSize, temperatureKelvin: settings.temperatureKelvin
+        )
         self.onFirstFrame = onFirstFrame
         self.onFailure = onFailure
         self.onSuspension = onSuspension

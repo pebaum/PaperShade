@@ -3,6 +3,7 @@
 #include "Settings.h"
 #include "WinUtil.h"
 #include "AppVersion.h"
+#include "WarmthDialog.h"
 #include <shellapi.h>
 #include <wtsapi32.h>
 #include <powrprof.h>
@@ -31,15 +32,18 @@ constexpr UINT About = 104;
 constexpr UINT Quit = 105;
 constexpr UINT ResetSettings = 106;
 constexpr UINT CaptureIndicator = 107;
+constexpr UINT CustomTemperature = 108;
+constexpr UINT WarmthOnly = 109;
+constexpr UINT TemperatureBase = 10000;
 constexpr UINT PresetBase = 200;
 constexpr UINT FpsBase = 300;
 constexpr UINT SizeBase = 400;
 constexpr int ToggleHotkey = 1;
 constexpr int PanicHotkey = 2;
 constexpr std::array<std::uint32_t, 4> FrameCaps{10, 15, 30, 60};
-constexpr std::array<const wchar_t*, 12> PresetKeys{
+constexpr std::array<const wchar_t*, 13> PresetKeys{
     L"natural", L"classic", L"average", L"paper", L"contrast", L"inverted",
-    L"ink-crisp", L"ink-dither", L"ink4", L"ink16", L"ps1-gray", L"ps1-color"
+    L"ink-crisp", L"ink-dither", L"ink4", L"ink16", L"ps1-gray", L"ps1-color", L"original"
 };
 
 HICON CreateTrayIcon(bool enabled) {
@@ -146,6 +150,11 @@ public:
             SetStartsWithWindows(!StartsWithWindows());
             return;
         }
+        if (command == CustomTemperature) {
+            const auto selected = ShowWarmthDialog(hwnd_, settings_.temperatureKelvin);
+            if (selected) Command(TemperatureBase + *selected);
+            return;
+        }
         if (command == ResetSettings) {
             settings_ = Settings{};
         } else if (command == Toggle) {
@@ -156,6 +165,13 @@ public:
             settings_.enabled = true;
         } else if (command == CaptureIndicator) {
             settings_.hideCaptureIndicator = !settings_.hideCaptureIndicator;
+        } else if (command == WarmthOnly) {
+            settings_.preset = Preset::Original;
+            if (settings_.temperatureKelvin == NeutralKelvin) settings_.temperatureKelvin = 3500;
+            settings_.enabled = true;
+        } else if (command >= TemperatureBase + MinimumKelvin && command <= TemperatureBase + NeutralKelvin) {
+            settings_.temperatureKelvin = command - TemperatureBase;
+            if (settings_.temperatureKelvin != NeutralKelvin) settings_.enabled = true;
         } else if (command >= PresetBase && command < PresetBase + PresetNames.size()) {
             settings_.preset = static_cast<Preset>(command - PresetBase);
             settings_.enabled = true;
@@ -216,13 +232,13 @@ private:
     void Apply() {
         KillTimer(hwnd_, RestartTimer);
         capture_.Stop();
-        if (!CanRun()) {
+        if (!CanRun() || IsNeutralOriginal(settings_.preset, settings_.temperatureKelvin)) {
             color_.Restore();
-        } else if (UsesCapture(settings_.preset)) {
+        } else if (UsesCapture(settings_.preset, settings_.temperatureKelvin)) {
             color_.Restore();
             capture_.Start(hwnd_, settings_);
         } else {
-            color_.Apply(settings_.preset);
+            color_.Apply(settings_.preset, settings_.temperatureKelvin);
         }
         UpdateTray();
     }
@@ -242,7 +258,8 @@ private:
         icon.uCallbackMessage = TrayMessage;
         icon.hIcon = CanRun() ? onIcon_ : offIcon_;
         const auto name = std::wstring(L"PaperShade - ") +
-            (CanRun() ? PresetNames[static_cast<std::size_t>(settings_.preset)] : L"paused");
+            (CanRun() ? PresetNames[static_cast<std::size_t>(settings_.preset)] : L"paused") +
+            L" | " + std::to_wstring(settings_.temperatureKelvin) + L" K";
         wcsncpy_s(icon.szTip, name.c_str(), _TRUNCATE);
         return icon;
     }
@@ -277,22 +294,36 @@ private:
         HMENU presets = CreatePopupMenu();
         HMENU frames = CreatePopupMenu();
         HMENU pixels = CreatePopupMenu();
-        if (!menu || !presets || !frames || !pixels) {
+        HMENU warmth = CreatePopupMenu();
+        if (!menu || !presets || !frames || !pixels || !warmth) {
             if (menu) DestroyMenu(menu);
             if (presets) DestroyMenu(presets);
             if (frames) DestroyMenu(frames);
             if (pixels) DestroyMenu(pixels);
+            if (warmth) DestroyMenu(warmth);
             throw winrt::hresult_error(E_OUTOFMEMORY, L"Cannot open the tray menu.");
         }
         AppendMenuW(menu, MF_STRING, Toggle, CanRun() ? L"Pause filters\tCtrl+Alt+G" : L"Enable filters\tCtrl+Alt+G");
         AppendMenuW(menu, MF_STRING, Pause, L"Emergency pause\tCtrl+Alt+Shift+G");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         for (UINT index = 0; index < PresetNames.size(); ++index) {
-            if (index == 6 || index == 10) AppendMenuW(presets, MF_SEPARATOR, 0, nullptr);
+            if (index == 6 || index == 10 || index == 12) AppendMenuW(presets, MF_SEPARATOR, 0, nullptr);
             const UINT flags = MF_STRING | (index == static_cast<UINT>(settings_.preset) ? MF_CHECKED : 0);
             AppendMenuW(presets, flags, PresetBase + index, PresetNames[index]);
         }
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(presets), L"Display style");
+        AppendMenuW(warmth, MF_STRING, WarmthOnly, L"Warmth only (original colors)");
+        AppendMenuW(warmth, MF_SEPARATOR, 0, nullptr);
+        for (const auto kelvin : KelvinPresets) {
+            const std::wstring label = std::to_wstring(kelvin) +
+                (kelvin == NeutralKelvin ? L" K - neutral / off" : L" K");
+            AppendMenuW(warmth, MF_STRING | (settings_.temperatureKelvin == kelvin ? MF_CHECKED : 0),
+                TemperatureBase + kelvin, label.c_str());
+        }
+        AppendMenuW(warmth, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(warmth, MF_STRING, CustomTemperature, L"Custom temperature...");
+        const auto warmthLabel = L"Warmth (Kelvin) - " + std::to_wstring(settings_.temperatureKelvin) + L" K";
+        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(warmth), warmthLabel.c_str());
         for (UINT index = 0; index < FrameCaps.size(); ++index) {
             std::wstring label = std::to_wstring(FrameCaps[index]) + L" fps";
             if (FrameCaps[index] == 15) label += L" - balanced (default)";
@@ -330,8 +361,10 @@ private:
         std::wostringstream text;
         text << L"PaperShade " << PaperShadeVersion << L" - native Windows 11 desktop filters\n\n"
              << L"Style: " << PresetNames[static_cast<std::size_t>(settings_.preset)]
-             << L"\nState: " << (CanRun() ? L"enabled" : L"paused") << L"\n";
-        if (CanRun() && UsesCapture(settings_.preset)) {
+             << L"\nState: " << (CanRun() ? L"enabled" : L"paused")
+             << L"\nColor temperature: " << settings_.temperatureKelvin << L" K"
+             << (settings_.temperatureKelvin == NeutralKelvin ? L" (neutral / off)\n" : L" (approximate warmth)\n");
+        if (CanRun() && UsesCapture(settings_.preset, settings_.temperatureKelvin)) {
             text << L"Engine: GPU capture + one shader pass\nAdapter: " << stats.adapter
                  << L"\nDisplays: " << stats.monitors << L"\nPresented frames: " << stats.frames
                  << L"\nCap: " << settings_.fps << L" fps (maximum, not a fixed redraw loop)"
@@ -345,7 +378,8 @@ private:
             }
             text << L"\nCapture indicator: " << border;
         } else {
-            text << L"Engine: " << (CanRun() ? L"Windows compositor color matrix (no app render loop)" : L"idle");
+            text << L"Engine: " << (CanRun() && !IsNeutralOriginal(settings_.preset, settings_.temperatureKelvin)
+                ? L"Windows compositor color matrix (no app render loop)" : L"idle / no color processing");
         }
         text << L"\n\nLeft-click icon: toggle. Right-click: styles and settings."
              << L"\nCtrl+Alt+Shift+G: always pause."
@@ -355,6 +389,7 @@ private:
                 L"and exclusive fullscreen content cannot be guaranteed."
              << L"\nPS1 native mode reproduces signed 4x4 dithering and RGB555 quantization; "
                 L"it is not console or CRT emulation."
+             << L"\nKelvin warmth is applied after the style and can tint its final palette. 6500 K disables warmth."
              << L"\n\nARM64 devices: use the ARM64 build. Intel/AMD PCs: use x64.";
         MessageBoxW(hwnd_, text.str().c_str(), L"About PaperShade", MB_OK | MB_ICONINFORMATION);
     }
@@ -386,6 +421,7 @@ private:
             case 4: return static_cast<LRESULT>(capture_.Stats().frames);
             case 5: return errors_;
             case 6: return static_cast<LRESULT>(capture_.Stats().border);
+            case 7: return settings_.temperatureKelvin;
             default: return -1;
             }
         case TrayMessage: {
@@ -398,15 +434,15 @@ private:
             Command(wparam == PanicHotkey ? Pause : Toggle);
             return 0;
         case CaptureFrameMessage:
-            if (CanRun() && UsesCapture(settings_.preset)) capture_.HandleFrame();
+            if (CanRun() && UsesCapture(settings_.preset, settings_.temperatureKelvin)) capture_.HandleFrame();
             return 0;
         case CaptureFailureMessage: {
             const auto detail = capture_.LastError();
-            if (CanRun() && UsesCapture(settings_.preset) && !detail.empty()) Fail(detail);
+            if (CanRun() && UsesCapture(settings_.preset, settings_.temperatureKelvin) && !detail.empty()) Fail(detail);
             return 0;
         }
         case CaptureBorderMessage:
-            if (CanRun() && UsesCapture(settings_.preset)) {
+            if (CanRun() && UsesCapture(settings_.preset, settings_.temperatureKelvin)) {
                 const bool required = capture_.Stats().border == CaptureBorderState::RequiredByWindows;
                 if (required && !borderNoticeShown_) {
                     Notify(L"Windows requires the capture indicator",
@@ -488,17 +524,20 @@ UINT ParseCommand(int argc, wchar_t** argv) {
         if (option == L"--reset-settings") return ResetSettings;
         if (option == L"--startup") return 0;
         if (option == L"--about") return About;
+        if (option == L"--warmth") return CustomTemperature;
+        if (option == L"--warmth-only") return WarmthOnly;
     }
     if (argc == 3 && option == L"--preset") {
         for (UINT index = 0; index < PresetKeys.size(); ++index) {
             if (std::wstring(argv[2]) == PresetKeys[index]) return PresetBase + index;
         }
     }
-    if (argc == 3 && (option == L"--fps" || option == L"--pixel-size")) {
+    if (argc == 3 && (option == L"--fps" || option == L"--pixel-size" || option == L"--kelvin")) {
         wchar_t* end = nullptr;
         errno = 0;
         const unsigned long value = std::wcstoul(argv[2], &end, 10);
         if (errno == 0 && end != argv[2] && *end == L'\0') {
+            if (option == L"--kelvin" && ValidKelvin(value)) return TemperatureBase + value;
             if (option == L"--pixel-size" && value >= 1 && value <= 4) return SizeBase + value - 1;
             for (UINT index = 0; index < FrameCaps.size(); ++index) {
                 if (option == L"--fps" && value == FrameCaps[index]) return FpsBase + index;
@@ -507,8 +546,8 @@ UINT ParseCommand(int argc, wchar_t** argv) {
     }
     throw winrt::hresult_invalid_argument(
         L"Options: --enable, --pause, --toggle, --quit, --safe, --about, --reset-settings, "
-        L"--preset <natural|classic|average|paper|contrast|inverted|ink-crisp|ink-dither|ink4|ink16|ps1-gray|ps1-color>, "
-        L"--fps <10|15|30|60>, --pixel-size <1|2|3|4>.");
+        L"--preset <natural|classic|average|paper|contrast|inverted|ink-crisp|ink-dither|ink4|ink16|ps1-gray|ps1-color|original>, "
+        L"--fps <10|15|30|60>, --pixel-size <1|2|3|4>, --kelvin <1000..6500>, --warmth, --warmth-only.");
 }
 
 }
@@ -544,8 +583,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             if (!existing) throw winrt::hresult_error(E_FAIL, L"PaperShade is still starting. Try again in a moment.");
             if (argc == 2 && std::wstring(raw[1]) == L"--startup") return 0;
             const UINT dispatched = command ? command : About;
-            if (dispatched == About) {
-                CheckWin32(PostMessageW(existing, CommandMessage, About, 0), L"Cannot open PaperShade information.");
+            if (dispatched == About || dispatched == CustomTemperature) {
+                CheckWin32(PostMessageW(existing, CommandMessage, dispatched, 0), L"Cannot open the PaperShade dialog.");
                 return 0;
             }
             DWORD_PTR response = 0;

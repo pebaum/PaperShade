@@ -57,6 +57,10 @@ Settings LoadSettings() {
         if (*value > 1) throw winrt::hresult_invalid_argument(L"Stored capture-indicator preference is invalid. Use --reset-settings.");
         result.hideCaptureIndicator = *value != 0;
     }
+    if (const auto value = ReadDword(L"TemperatureKelvin")) {
+        if (!ValidKelvin(*value)) throw winrt::hresult_invalid_argument(L"Stored color temperature is invalid. Use --reset-settings.");
+        result.temperatureKelvin = *value;
+    }
     return result;
 }
 
@@ -67,7 +71,8 @@ void SaveSettings(const Settings& settings) {
     const std::pair<const wchar_t*, DWORD> values[]{
         {L"Preset", static_cast<DWORD>(settings.preset)}, {L"Fps", settings.fps},
         {L"PixelSize", settings.pixelSize}, {L"Enabled", settings.enabled ? 1u : 0u},
-        {L"HideCaptureIndicator", settings.hideCaptureIndicator ? 1u : 0u}
+        {L"HideCaptureIndicator", settings.hideCaptureIndicator ? 1u : 0u},
+        {L"TemperatureKelvin", settings.temperatureKelvin}
     };
     for (const auto& [name, value] : values) {
         CheckRegistry(RegSetValueExW(key.value, name, 0, REG_DWORD,

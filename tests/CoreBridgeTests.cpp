@@ -13,10 +13,10 @@ void Require(bool condition, const char* message) {
 int main() {
     try {
         Require(PSPresetCount() == paper::PresetNames.size(), "Preset counts differ across the C bridge.");
-        Require(sizeof(PSFilterParameters) == 48 && sizeof(PSPixel) == 4, "Cross-platform GPU ABI changed.");
+        Require(sizeof(PSFilterParameters) == 64 && sizeof(PSPixel) == 4, "Cross-platform GPU ABI changed.");
         PSFilterParameters parameters{};
         Require(!PSGetFilterParameters(-1, 1, &parameters), "Invalid preset accepted.");
-        Require(!PSGetFilterParameters(12, 1, &parameters), "Out-of-range preset accepted.");
+        Require(!PSGetFilterParameters(13, 1, &parameters), "Out-of-range preset accepted.");
         Require(!PSGetFilterParameters(0, 0, &parameters), "Zero pixel size accepted.");
         Require(!PSGetFilterParameters(0, 5, &parameters), "Oversized dither accepted.");
         Require(!PSGetFilterParameters(0, 1, nullptr), "Null output accepted.");
@@ -56,7 +56,7 @@ int main() {
         Require(!PSReferencePixel({}, 0, 0, &parameters, &result), "Non-finite weight accepted.");
         parameters.red = std::numeric_limits<float>::max();
         Require(!PSReferencePixel({}, 0, 0, &parameters, &result), "Overflowing weight accepted.");
-        std::cout << "Shared C/C++ filter ABI and 196608 cross-platform reference pixels passed.\n";
+        std::cout << "Shared C/C++ filter ABI and cross-platform reference pixels passed.\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

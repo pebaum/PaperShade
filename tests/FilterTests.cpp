@@ -47,7 +47,7 @@ void TestMatrices() {
         Require(matrix[18] == 1 && matrix[24] == 1, "Matrix must preserve alpha and homogeneous coordinates.");
         Require(!paper::UsesCapture(preset), "Basic grayscale must not initialize screen capture.");
     }
-    for (unsigned index = 6; index < static_cast<unsigned>(paper::Preset::Count); ++index) {
+    for (unsigned index = 6; index <= static_cast<unsigned>(paper::Preset::Ps1Color); ++index) {
         Require(paper::UsesCapture(static_cast<paper::Preset>(index)), "A nonlinear preset was routed to a linear matrix.");
     }
 }
@@ -90,7 +90,7 @@ int main() {
         Require(paper::PresetNames.size() == static_cast<std::size_t>(paper::Preset::Count), "Preset labels are incomplete.");
         Require(paper::ValidFps(10) && paper::ValidFps(15) && paper::ValidFps(30) && paper::ValidFps(60), "Supported frame cap rejected.");
         Require(!paper::ValidFps(0) && !paper::ValidFps(144), "Unsupported frame cap accepted.");
-        Require(!paper::ValidPreset(12) && !paper::ValidPreset(0xffffffff), "Invalid preset accepted.");
+        Require(paper::ValidPreset(12) && !paper::ValidPreset(13) && !paper::ValidPreset(0xffffffff), "Invalid preset accepted.");
         Require(!paper::Settings{}.enabled, "First launch must not change the display without a user action.");
         Require(paper::Settings{}.hideCaptureIndicator, "Borderless capture must be preferred by default.");
         std::cout << "All filter, palette, settings-boundary, and 4096 exhaustive PS1 cases passed.\n";

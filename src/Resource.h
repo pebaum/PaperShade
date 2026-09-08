@@ -1,0 +1,7 @@
+#pragma once
+
+#define IDD_WARMTH 2000
+#define IDC_KELVIN_SLIDER 2001
+#define IDC_KELVIN_VALUE 2002
+#define IDC_KELVIN_ERROR 2003
+#define IDC_KELVIN_NEUTRAL 2004

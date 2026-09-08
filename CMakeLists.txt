@@ -24,6 +24,10 @@ if(BUILD_TESTING)
     target_include_directories(CoreBridgeTests PRIVATE src)
     target_link_libraries(CoreBridgeTests PRIVATE papershade_core)
     add_test(NAME shared-core-abi COMMAND CoreBridgeTests)
+    add_executable(WarmthTests tests/WarmthTests.cpp)
+    target_include_directories(WarmthTests PRIVATE src)
+    target_link_libraries(WarmthTests PRIVATE papershade_core)
+    add_test(NAME kelvin-warmth COMMAND WarmthTests)
 endif()
 
 if(NOT WIN32)
@@ -63,10 +67,10 @@ target_include_directories(papershade_gpu PUBLIC src "${CMAKE_CURRENT_BINARY_DIR
 target_link_libraries(papershade_gpu PUBLIC d3d11 dxgi d3dcompiler windowsapp)
 
 add_executable(PaperShade WIN32
-    src/Main.cpp src/Settings.cpp src/ColorEffect.cpp src/CaptureEngine.cpp
+    src/Main.cpp src/Settings.cpp src/ColorEffect.cpp src/CaptureEngine.cpp src/WarmthDialog.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/generated/App.rc" "${PAPERSHADE_ICON}")
 target_link_libraries(PaperShade PRIVATE papershade_gpu
-    windowsapp dcomp dwmapi Magnification shell32 advapi32 wtsapi32 powrprof uuid)
+    windowsapp dcomp dwmapi Magnification shell32 advapi32 wtsapi32 powrprof uuid comctl32)
 target_link_options(PaperShade PRIVATE
     "/MANIFEST:EMBED"
     "/MANIFESTINPUT:${CMAKE_CURRENT_BINARY_DIR}/generated/App.manifest")

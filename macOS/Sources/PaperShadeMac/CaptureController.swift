@@ -5,11 +5,12 @@ import PaperShadeRendering
 import ScreenCaptureKit
 
 enum CaptureState {
-    case paused, starting, active(Int), suspended, failed(String), quitting
+    case paused, noEffect, starting, active(Int), suspended, failed(String), quitting
 
     var title: String {
         switch self {
         case .paused: return "Paused"
+        case .noEffect: return "Enabled — original colors, no effect (no capture/GPU)"
         case .starting: return "Starting…"
         case .active(let count): return "Active — \(count) display\(count == 1 ? "" : "s")"
         case .suspended: return "Paused while the session or displays sleep"
@@ -81,7 +82,7 @@ final class CaptureController {
     func apply(_ settings: FilterSettings, userInitiated: Bool) {
         guard !exiting else { return }
         self.settings = settings.validated()
-        requestedEnabled = settings.enabled
+        requestedEnabled = self.settings.enabled
         if requestedEnabled {
             begin(userInitiated: userInitiated)
         } else {
@@ -102,7 +103,8 @@ final class CaptureController {
     }
 
     private var canCapture: Bool {
-        !exiting && requestedEnabled && !machineSleeping && !displaysSleeping && sessionActive
+        !exiting && requestedEnabled && settings.requiresCapture &&
+            !machineSleeping && !displaysSleeping && sessionActive
     }
 
     private func isCurrent(_ token: UInt64) -> Bool {
@@ -111,10 +113,12 @@ final class CaptureController {
 
     private func begin(userInitiated: Bool) {
         invalidate()
+        // Invalidate old generations before bypassing consent, Metal, and ScreenCaptureKit.
+        guard settings.hasEffect else { state = .noEffect; return }
         guard canCapture else { state = .suspended; return }
         let token = generation
         if !CGPreflightScreenCaptureAccess() {
-            // Only an explicit enable/permission action may trigger Apple's consent prompt.
+            // Only an explicit enable/style/warmth action may trigger Apple's consent prompt.
             if userInitiated { _ = CGRequestScreenCaptureAccess() }
             guard isCurrent(token) else { return }
             guard CGPreflightScreenCaptureAccess() else {
@@ -237,12 +241,13 @@ final class CaptureController {
     private func suspend() {
         guard !exiting else { return }
         invalidate()
-        if requestedEnabled { state = .suspended }
+        if requestedEnabled { state = settings.hasEffect ? .suspended : .noEffect }
     }
 
     private func restartAfterEvent(delay: TimeInterval) {
         guard !exiting, requestedEnabled else { return }
         invalidate()
+        guard settings.hasEffect else { state = .noEffect; return }
         guard canCapture else { state = .suspended; return }
         state = .starting
         let token = generation
@@ -268,8 +273,11 @@ final class CaptureController {
     }
 
     static let permissionInstructions =
-        "PaperShade needs macOS Screen Recording permission. Open System Settings → Privacy & Security → " +
+        "Active effects use ScreenCaptureKit + Metal and need macOS Screen Recording permission. " +
+        "Original colors at 6500 K has no effect and uses no capture or GPU; it needs no permission. " +
+        "Open System Settings → Privacy & Security → " +
         "Screen Recording (or Screen & System Audio Recording), enable PaperShade, then quit and reopen it " +
         "if macOS requests a restart. Permission is only requested when you explicitly enable PaperShade " +
-        "or choose Grant Screen Recording Access. Apple's recording indicator remains visible."
+        "with an effect, select a style or warmth, or choose Grant Screen Recording Access. " +
+        "Apple's recording indicator remains visible during capture."
 }

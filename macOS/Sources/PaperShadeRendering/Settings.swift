@@ -5,6 +5,7 @@ import Foundation
 public enum Preset: Int32, CaseIterable, Hashable {
     case natural = 0, classic, average, paper, highContrast, inverted
     case inkThreshold, inkDither, ink4, ink16, ps1Gray, ps1Color
+    case original = 12
 
     public var title: String {
         switch self {
@@ -20,6 +21,7 @@ public enum Preset: Int32, CaseIterable, Hashable {
         case .ink16: return "E-ink — 16 shades"
         case .ps1Gray: return "PS1 — grayscale RGB555"
         case .ps1Color: return "PS1 — original color RGB555"
+        case .original: return "Original colors (warmth only)"
         }
     }
 }
@@ -27,25 +29,38 @@ public enum Preset: Int32, CaseIterable, Hashable {
 public struct FilterSettings: Equatable {
     public static let frameCaps = [10, 15, 30, 60]
     public static let patternSizes = [1, 2, 3, 4]
+    public static let neutralTemperatureKelvin = 6500
+    public static let temperatureRange = 1000...6500
+    public static let temperaturePresets = [6500, 5500, 4500, 3500, 2700, 2000, 1200]
 
     public var preset: Preset
     public var framesPerSecond: Int
     public var pixelSize: Int
     public var enabled: Bool
+    public var temperatureKelvin: Int
+
+    public var hasEffect: Bool {
+        preset != .original || temperatureKelvin != Self.neutralTemperatureKelvin
+    }
+
+    public var requiresCapture: Bool { enabled && hasEffect }
 
     public init(
         preset: Preset = .natural,
         framesPerSecond: Int = 15,
         pixelSize: Int = 1,
-        enabled: Bool = false
+        enabled: Bool = false,
+        temperatureKelvin: Int = 6500
     ) {
-        if !Self.isValidFrameCap(framesPerSecond) || !Self.patternSizes.contains(pixelSize) {
+        let validTemperature = Self.isValidTemperature(temperatureKelvin)
+        if !Self.isValidFrameCap(framesPerSecond) || !Self.patternSizes.contains(pixelSize) || !validTemperature {
             NSLog("PaperShade: invalid filter settings were normalized to supported defaults.")
         }
         self.preset = preset
         self.framesPerSecond = Self.isValidFrameCap(framesPerSecond) ? framesPerSecond : 15
         self.pixelSize = Self.patternSizes.contains(pixelSize) ? pixelSize : 1
-        self.enabled = enabled
+        self.enabled = enabled && validTemperature
+        self.temperatureKelvin = validTemperature ? temperatureKelvin : Self.neutralTemperatureKelvin
     }
 
     public static func isValidFrameCap(_ value: Int) -> Bool {
@@ -53,8 +68,37 @@ public struct FilterSettings: Equatable {
         return PSValidFrameCap(unsigned) == 1
     }
 
+    public static func isValidTemperature(_ value: Int) -> Bool {
+        guard let unsigned = UInt32(exactly: value) else { return false }
+        return PSValidTemperature(unsigned) == 1
+    }
+
+    public static func parseTemperature(_ text: String) throws -> Int {
+        guard let value = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              isValidTemperature(value) else {
+            throw RenderingError("Enter a whole-number temperature from 1000 to 6500 K.")
+        }
+        return value
+    }
+
+    public mutating func applyTemperature(_ value: Int) throws {
+        guard Self.isValidTemperature(value) else {
+            throw RenderingError("The selected temperature must be from 1000 to 6500 K.")
+        }
+        temperatureKelvin = value
+        // Turning warmth off must not resume an independently paused style.
+        if value != Self.neutralTemperatureKelvin { enabled = true }
+    }
+
+    public mutating func enableWarmthOnly() {
+        preset = .original
+        if temperatureKelvin == Self.neutralTemperatureKelvin { temperatureKelvin = 3500 }
+        enabled = true
+    }
+
     public func validated() -> Self {
-        Self(preset: preset, framesPerSecond: framesPerSecond, pixelSize: pixelSize, enabled: enabled)
+        Self(preset: preset, framesPerSecond: framesPerSecond, pixelSize: pixelSize,
+             enabled: enabled, temperatureKelvin: temperatureKelvin)
     }
 }
 
@@ -64,6 +108,7 @@ public final class SettingsStore {
         static let frameCap = "frameCap"
         static let pixelSize = "pixelSize"
         static let enabled = "enabled"
+        static let temperatureKelvin = "temperatureKelvin"
     }
 
     private let defaults: UserDefaults
@@ -80,20 +125,24 @@ public final class SettingsStore {
         let enabled = storedEnabled ?? false
         let frameCap = integer(forKey: Key.frameCap)
         let pixelSize = integer(forKey: Key.pixelSize)
+        let temperatureKelvin = integer(forKey: Key.temperatureKelvin)
         let validFrameCap = frameCap.map(FilterSettings.isValidFrameCap) ?? false
         let validPixelSize = pixelSize.map { FilterSettings.patternSizes.contains($0) } ?? false
+        let validTemperature = temperatureKelvin.map(FilterSettings.isValidTemperature) ?? false
         let validEnabled = storedEnabled != nil
         let invalid = (defaults.object(forKey: Key.preset) != nil && rawPreset.flatMap(Preset.init(rawValue:)) == nil)
             || (defaults.object(forKey: Key.frameCap) != nil && !validFrameCap)
             || (defaults.object(forKey: Key.pixelSize) != nil && !validPixelSize)
             || (defaults.object(forKey: Key.enabled) != nil && !validEnabled)
+            || (defaults.object(forKey: Key.temperatureKelvin) != nil && !validTemperature)
         lastLoadWarning = invalid ? "Invalid saved preferences were ignored and supported defaults were loaded. PaperShade starts paused." : nil
         if let lastLoadWarning { NSLog("PaperShade: %@", lastLoadWarning) }
         return FilterSettings(
             preset: preset,
             framesPerSecond: frameCap ?? 15,
             pixelSize: pixelSize ?? 1,
-            enabled: enabled && !invalid
+            enabled: enabled && !invalid,
+            temperatureKelvin: temperatureKelvin ?? FilterSettings.neutralTemperatureKelvin
         )
     }
 
@@ -103,6 +152,7 @@ public final class SettingsStore {
         defaults.set(settings.framesPerSecond, forKey: Key.frameCap)
         defaults.set(settings.pixelSize, forKey: Key.pixelSize)
         defaults.set(settings.enabled, forKey: Key.enabled)
+        defaults.set(settings.temperatureKelvin, forKey: Key.temperatureKelvin)
     }
 
     private func integer(forKey key: String) -> Int? {
@@ -131,16 +181,19 @@ public struct RenderingError: LocalizedError {
 }
 
 public enum CoreParameters {
-    public static func make(preset: Preset, pixelSize: Int) throws -> PSFilterParameters {
+    public static func make(
+        preset: Preset, pixelSize: Int, temperatureKelvin: Int = 6500
+    ) throws -> PSFilterParameters {
         guard PSPresetCount() == UInt32(Preset.allCases.count),
-              MemoryLayout<PSFilterParameters>.size == 48,
-              MemoryLayout<PSFilterParameters>.stride == 48,
-              let size = Int32(exactly: pixelSize) else {
-            throw RenderingError("The shared filter ABI or pattern size is invalid.")
+              MemoryLayout<PSFilterParameters>.size == 64,
+              MemoryLayout<PSFilterParameters>.stride == 64,
+              let size = Int32(exactly: pixelSize),
+              let kelvin = Int32(exactly: temperatureKelvin) else {
+            throw RenderingError("The shared filter ABI, pattern size, or temperature is invalid.")
         }
         var parameters = PSFilterParameters()
-        guard PSGetFilterParameters(preset.rawValue, size, &parameters) == 1 else {
-            throw RenderingError("The shared filter core rejected the selected preset or pattern size.")
+        guard PSGetWarmFilterParameters(preset.rawValue, size, kelvin, &parameters) == 1 else {
+            throw RenderingError("The shared filter core rejected the selected preset, pattern size, or temperature.")
         }
         return parameters
     }

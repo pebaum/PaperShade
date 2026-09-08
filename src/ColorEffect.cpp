@@ -96,8 +96,9 @@ bool ColorEffect::Active() const noexcept {
     return impl_->applied;
 }
 
-void ColorEffect::Apply(Preset preset) {
-    if (UsesCapture(preset)) throw winrt::hresult_invalid_argument(L"This preset requires the capture engine.");
+void ColorEffect::Apply(Preset preset, std::uint32_t kelvin) {
+    if (!ValidKelvin(kelvin)) throw winrt::hresult_invalid_argument(L"Color temperature must be 1000-6500 K.");
+    if (UsesCapture(preset, kelvin)) throw winrt::hresult_invalid_argument(L"This style and temperature require the capture engine.");
     impl_->Initialize();
     impl_->CreateGuardian();
     auto& data = *impl_->view.data;
@@ -110,7 +111,7 @@ void ColorEffect::Apply(Preset preset) {
             throw winrt::hresult_error(E_FAIL, L"Another application changed the desktop color transform. PaperShade paused rather than overwriting it.");
         }
     }
-    const auto matrix = ColorMatrix(preset);
+    const auto matrix = ColorMatrix(preset, kelvin);
     const auto previous = data.applied;
     const LONG wasActive = data.active;
     std::memcpy(&data.applied, matrix.data(), sizeof(data.applied));

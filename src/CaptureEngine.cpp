@@ -594,9 +594,10 @@ struct CaptureEngine::Impl {
                 L"Capture must start on the message-loop thread of a valid owner window.");
         }
         if (!ValidPreset(static_cast<std::uint32_t>(settings.preset)) || !ValidFps(settings.fps) ||
+            !ValidKelvin(settings.temperatureKelvin) ||
             settings.pixelSize < 1 || settings.pixelSize > 4) {
             throw winrt::hresult_error(E_INVALIDARG,
-                L"Capture settings require a valid preset, 10/15/30/60 fps, and a pixel size from 1 to 4.");
+                L"Capture settings require a valid preset, 10/15/30/60 fps, 1000-6500 K, and a pixel size from 1 to 4.");
         }
         owner = window;
         ScopedDpiAwareness dpi;
@@ -630,7 +631,7 @@ struct CaptureEngine::Impl {
         classRegistered = true;
         const TimeSpan requestedInterval{(10'000'000LL + settings.fps - 1) / settings.fps};
         interval = std::chrono::duration_cast<Clock::duration>(requestedInterval);
-        constants = Constants(settings.preset, settings.pixelSize);
+        constants = Constants(settings.preset, settings.pixelSize, settings.temperatureKelvin);
         monitors.reserve(displays.size());
 
         // Finish and verify ALL hidden, excluded overlays before starting ANY capture session.

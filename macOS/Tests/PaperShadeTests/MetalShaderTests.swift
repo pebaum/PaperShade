@@ -17,8 +17,69 @@ final class MetalShaderTests: XCTestCase {
         let source = try makeSource(renderer: renderer, pixels: pixels, width: width, height: height)
         for preset in Preset.allCases {
             for scale in 1...4 {
-                let result = try render(renderer: renderer, source: source, preset: preset, scale: scale)
-                try compare(result, source: pixels, width: width, height: height, preset: preset, scale: scale)
+                for kelvin in [6500, 4500, 2700, 1200] {
+                    let result = try render(
+                        renderer: renderer, source: source, preset: preset, scale: scale, temperatureKelvin: kelvin
+                    )
+                    try compare(result, source: pixels, width: width, height: height,
+                                preset: preset, scale: scale, temperatureKelvin: kelvin)
+                }
+            }
+        }
+    }
+
+    func testRealMetalOriginalIdentityAndWarmAttenuation() throws {
+        let renderer = try requireRenderer()
+        let width = 256
+        let pixels = fixture(width: width, height: 1) { x, _ in
+            if x == 0 { return (0, 0, 0) }
+            if x == 255 { return (255, 255, 255) }
+            return (UInt8(x), UInt8((x * 73) & 255), UInt8(255 - x))
+        }
+        let source = try makeSource(renderer: renderer, pixels: pixels, width: width, height: 1)
+        let neutral = try render(renderer: renderer, source: source, preset: .original, scale: 1)
+        for x in 0..<width {
+            let index = x * 4
+            XCTAssertEqual(Array(neutral.bytes[index..<(index + 3)]), Array(pixels[index..<(index + 3)]))
+            XCTAssertEqual(neutral.bytes[index + 3], 255)
+        }
+        for kelvin in [4500, 2700, 1200, 1000] {
+            let warm = try render(
+                renderer: renderer, source: source, preset: .original, scale: 1, temperatureKelvin: kelvin
+            )
+            try compare(warm, source: pixels, width: width, height: 1,
+                        preset: .original, scale: 1, temperatureKelvin: kelvin)
+            for x in 0..<width {
+                for channel in 0..<3 {
+                    XCTAssertLessThanOrEqual(warm.bytes[x * 4 + channel], neutral.bytes[x * 4 + channel])
+                }
+            }
+            XCTAssertEqual(Array(warm.bytes.prefix(4)), [0, 0, 0, 255])
+            let white = 255 * 4
+            XCTAssertEqual(warm.bytes[white + 2], 255)
+            XCTAssertGreaterThan(warm.bytes[white + 2], warm.bytes[white + 1])
+            XCTAssertGreaterThan(warm.bytes[white + 1], warm.bytes[white])
+        }
+    }
+
+    func testRealMetalRejectsNonFiniteOrOutOfRangeWarmthGains() throws {
+        let renderer = try requireRenderer()
+        let source = try makeSource(renderer: renderer, pixels: [255, 255, 255, 0], width: 1, height: 1)
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false
+        )
+        descriptor.storageMode = .private
+        descriptor.usage = .renderTarget
+        let destination = try XCTUnwrap(renderer.device.makeTexture(descriptor: descriptor))
+        let fields: [WritableKeyPath<PSFilterParameters, Float>] = [\.warmthRed, \.warmthGreen, \.warmthBlue]
+        for field in fields {
+            for value in [Float.nan, .infinity, -.infinity, -0.01, 1.01] {
+                var parameters = try CoreParameters.make(preset: .original, pixelSize: 1)
+                parameters[keyPath: field] = value
+                let command = try XCTUnwrap(renderer.commandQueue.makeCommandBuffer())
+                XCTAssertThrowsError(try renderer.encode(
+                    source: source, destination: destination, parameters: parameters, commandBuffer: command
+                ))
             }
         }
     }
@@ -62,10 +123,11 @@ final class MetalShaderTests: XCTestCase {
             defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
             let base = try XCTUnwrap(CVPixelBufferGetBaseAddress(pixelBuffer))
             let stride = CVPixelBufferGetBytesPerRow(pixelBuffer)
-            pixels.withUnsafeBytes { input in
+            try pixels.withUnsafeBytes { input in
+                let source = try XCTUnwrap(input.baseAddress)
                 for y in 0..<height {
                     base.advanced(by: y * stride).copyMemory(
-                        from: input.baseAddress!.advanced(by: y * width * 4), byteCount: width * 4
+                        from: source.advanced(by: y * width * 4), byteCount: width * 4
                     )
                 }
             }
@@ -73,8 +135,16 @@ final class MetalShaderTests: XCTestCase {
         let cache = try renderer.makeTextureCache()
         let captured = try CapturedTexture(pixelBuffer: pixelBuffer, cache: cache)
         XCTAssertEqual(captured.texture.pixelFormat, .bgra8Unorm)
-        let result = try render(renderer: renderer, source: captured.texture, preset: .ps1Color, scale: 1)
-        try compare(result, source: pixels, width: width, height: height, preset: .ps1Color, scale: 1)
+        let cases: [(Preset, Int)] = [
+            (.ps1Color, 6500), (.original, 6500), (.ps1Color, 2700), (.original, 1200), (.ink4, 4500)
+        ]
+        for (preset, kelvin) in cases {
+            let result = try render(
+                renderer: renderer, source: captured.texture, preset: preset, scale: 1, temperatureKelvin: kelvin
+            )
+            try compare(result, source: pixels, width: width, height: height,
+                        preset: preset, scale: 1, temperatureKelvin: kelvin)
+        }
         withExtendedLifetime(captured) {}
     }
 
@@ -107,15 +177,16 @@ final class MetalShaderTests: XCTestCase {
         descriptor.usage = .shaderRead
         descriptor.storageMode = renderer.device.hasUnifiedMemory ? .shared : .managed
         let texture = try XCTUnwrap(renderer.device.makeTexture(descriptor: descriptor))
-        pixels.withUnsafeBytes {
+        try pixels.withUnsafeBytes {
+            let base = try XCTUnwrap($0.baseAddress)
             texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0,
-                            withBytes: $0.baseAddress!, bytesPerRow: width * 4)
+                            withBytes: base, bytesPerRow: width * 4)
         }
         return texture
     }
 
     private func render(
-        renderer: MetalRenderer, source: MTLTexture, preset: Preset, scale: Int
+        renderer: MetalRenderer, source: MTLTexture, preset: Preset, scale: Int, temperatureKelvin: Int = 6500
     ) throws -> (bytes: [UInt8], rowBytes: Int) {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: source.width, height: source.height, mipmapped: false
@@ -128,8 +199,11 @@ final class MetalShaderTests: XCTestCase {
             length: rowBytes * source.height, options: .storageModeShared
         ))
         let command = try XCTUnwrap(renderer.commandQueue.makeCommandBuffer())
-        try renderer.encode(source: source, destination: output,
-                            parameters: CoreParameters.make(preset: preset, pixelSize: scale), commandBuffer: command)
+        try renderer.encode(
+            source: source, destination: output,
+            parameters: CoreParameters.make(preset: preset, pixelSize: scale, temperatureKelvin: temperatureKelvin),
+            commandBuffer: command
+        )
         // CPU readback exists only in tests, never in the application frame path.
         let blit = try XCTUnwrap(command.makeBlitCommandEncoder())
         blit.copy(
@@ -154,12 +228,16 @@ final class MetalShaderTests: XCTestCase {
 
     private func compare(
         _ result: (bytes: [UInt8], rowBytes: Int), source: [UInt8],
-        width: Int, height: Int, preset: Preset, scale: Int
+        width: Int, height: Int, preset: Preset, scale: Int, temperatureKelvin: Int = 6500
     ) throws {
-        var parameters = try CoreParameters.make(preset: preset, pixelSize: scale)
-        // Only continuous grayscale permits ±1 for UNORM tie-rounding. Every
-        // quantized palette, including PS1 RGB555, must match byte-for-byte.
-        let tolerance = parameters.quantizer == 0 ? 1 : 0
+        var parameters = try CoreParameters.make(preset: preset, pixelSize: scale, temperatureKelvin: temperatureKelvin)
+        // Neutral quantized palettes and Original are byte-exact. Continuous gray
+        // retains its existing UNORM tolerance; attenuated channels allow ±1 only
+        // for post-warm UNORM rounding, never an additional pre-quantization error.
+        let neutralTolerance = parameters.quantizer == 0 && parameters.color == 0 ? 1 : 0
+        let tolerances = [parameters.warmthBlue, parameters.warmthGreen, parameters.warmthRed].map { gain in
+            gain == 0 ? 0 : gain < 1 ? 1 : neutralTolerance
+        }
         for y in 0..<height {
             for x in 0..<width {
                 let sourceIndex = (y * width + x) * 4
@@ -172,11 +250,11 @@ final class MetalShaderTests: XCTestCase {
                 }
                 let actual = Array(result.bytes[destinationIndex..<(destinationIndex + 4)])
                 let reference = [expected.blue, expected.green, expected.red, expected.alpha]
-                if actual[3] != 255 || zip(actual.prefix(3), reference.prefix(3)).contains(where: {
-                    abs(Int($0.0) - Int($0.1)) > tolerance
+                if actual[3] != 255 || (0..<3).contains(where: {
+                    abs(Int(actual[$0]) - Int(reference[$0])) > tolerances[$0]
                 }) {
-                    return XCTFail("Metal != C oracle: \(preset), scale \(scale), (\(x), \(y)), " +
-                        "BGRA \(actual) != \(reference), tolerance \(tolerance)")
+                    return XCTFail("Metal != C oracle: \(preset), \(temperatureKelvin) K, scale \(scale), (\(x), \(y)), " +
+                        "BGRA \(actual) != \(reference), BGR tolerances \(tolerances)")
                 }
             }
         }

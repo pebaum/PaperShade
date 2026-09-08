@@ -62,8 +62,9 @@ versions require reopening the app after a new permission grant.
 pauses. Mode, frame cap, and pattern-size preferences are saved separately from
 the Windows installation.
 
-Unlike Windows' six matrix-only modes, **all macOS styles use ScreenCaptureKit
-and Metal**. There is no supported public macOS equivalent of the Windows
+Unlike Windows' compositor modes, **macOS color processing uses ScreenCaptureKit
+and Metal**. Original colors at neutral 6500 K bypass processing entirely.
+There is no supported public macOS equivalent of the Windows
 full-desktop color-matrix API used here. macOS owns its screen-recording privacy
 indicator; PaperShade does not try to hide it or alter system privacy settings.
 Screen capture is local and frames are never saved.
@@ -77,7 +78,7 @@ repository. See [macOS-specific documentation](../macOS/README.md).
 
 ## Styles
 
-The same preset parameters, reference math, and dither matrices are shared by
+The same preset parameters, reference math, Kelvin gains, and dither matrices are shared by
 both platforms through `core/include/PaperShadeCore.h`. The engine column below
 describes Windows; macOS uses Metal for every style.
 
@@ -87,7 +88,7 @@ describes Windows; macOS uses Metal for every style.
 | Classic | Rec. 601 weighted grayscale | Windows compositor matrix |
 | Equal-channel | Arithmetic mean of red, green, and blue | Windows compositor matrix |
 | Soft paper | Reduced-contrast grayscale with softer black and white | Windows compositor matrix |
-| High contrast | Increased contrast, clipped to the display range | Windows compositor matrix |
+| High contrast | Increased contrast, clipped to the display range | Compositor at neutral temperature; GPU with warmth |
 | Inverted | Light text / dark backgrounds, with grayscale inversion | Windows compositor matrix |
 | E-ink crisp | Two shades, hard threshold | GPU |
 | E-ink dithered | Two shades with a stable 4x4 ordered pattern | GPU |
@@ -95,18 +96,54 @@ describes Windows; macOS uses Metal for every style.
 | E-ink 16 shades | Sixteen equally spaced shades with ordered dithering | GPU |
 | PS1 grayscale | Grayscale conversion followed by original PS1 RGB555 dithering | GPU |
 | PS1 original color | Original desktop color followed by PS1 RGB555 dithering | GPU |
+| Original colors | Color-preserving mode for warmth without grayscale | Compositor with warmth; no processing at 6500 K |
 
 Grayscale weights operate on the display's encoded RGB values, matching the
 compositor's color-matrix model; they are not a linear-light photometric
 conversion. E-ink styles simulate limited palettes, not physical panel
 waveforms, ghosting, or flashing refresh cycles.
 
+## Kelvin warming
+
+The **Warmth (Kelvin)** submenu provides 6500, 5500, 4500, 3500, 2700, 2000,
+and 1200 K presets, plus a slider/numeric dialog accepting whole values from
+1000 through 6500 K. Lower temperatures look warmer. **6500 K disables
+PaperShade's warmth exactly**, preserving existing neutral rendering.
+
+**Warmth only (original colors)** selects the color-preserving style and uses
+3500 K if the current temperature is neutral. Warmth can also be combined with
+grayscale, e-ink, or PS1 styles. Selecting a warm temperature enables processing;
+selecting neutral does not unexpectedly enable a paused grayscale style.
+Canceling the custom dialog does not change preferences.
+
+The shared C++ core computes an approximate blackbody RGB white-point curve,
+normalized to 6500 K. Red is unchanged and green/blue are attenuated; there is
+no brightness boost. This is a visual color-temperature approximation, not a
+measurement or calibration of the panel's physical white point. Windows Night
+light, macOS Night Shift, and other color utilities can stack with this effect.
+No OS-wide privacy, gamma-ramp, or ICC settings are modified.
+
+Warmth is applied **after** style processing and palette quantization. Thus,
+warm PS1/e-ink output is a tinted version of the palette, not the original
+untinted RGB555/shade values. Set 6500 K when comparing exact neutral palettes.
+Windows uses a GPU pass for warmed high contrast so grayscale is clipped
+before the warmth gain; a single clipped color matrix cannot express both
+operations correctly.
+
+This release provides manual control, not automatic daylight/sunset scheduling.
+Temperatures are stored per user. The shared renderer uniform layout is
+64 bytes, including the trailing red/green/blue warmth gains.
+
 ## Power and hardware
 
-On Windows, the six basic grayscale styles set a compositor matrix and then
+On Windows, neutral basic grayscale styles and color-preserving warmth use a
+compositor matrix and then
 sleep in the message loop. They do not capture the screen, upload frames, initialize
 D3D, or run an application redraw timer. A small recovery helper waits on a
-process handle while a matrix filter is active.
+process handle while a matrix filter is active. Most grayscale styles also
+remain compositor-only with warmth; warmed high contrast uses capture to keep
+the clipping/temperature order correct. Original colors at 6500 K are a no-op
+on both platforms.
 
 E-ink and PS1 styles require real GPU work: Windows Graphics Capture, a
 click-through overlay on each monitor, and one D3D11 shader pass. The default cap
@@ -130,7 +167,7 @@ copied back to the CPU or saved to disk during normal operation.
 
 ## PS1 accuracy
 
-At **1 pixel**, the PS1 styles use this original signed screen-space matrix:
+At **1 pixel and neutral 6500 K**, the PS1 styles use this original signed screen-space matrix:
 
 ```text
 -4   0  -3   1
@@ -222,6 +259,7 @@ simulates a failed owner process, checks frame caps and input transparency,
 then restores the original colors. It is deliberately not run by CTest.
 `DesktopTests.exe --capture-only` targets borderless permission, live capture,
 the visible-border preference, and cancellation while permission is pending.
+`DesktopTests.exe --warmth-only` checks real compositor warming and restoration.
 
 After both Release builds are complete, `tools\Package.ps1` produces standalone
 ARM64/x64 executables, portable ZIPs, and a source ZIP in `dist`.
@@ -273,6 +311,9 @@ is not a claim that every GPU/display/OS configuration has been exercised.
 .\PaperShade.exe --preset ink4
 .\PaperShade.exe --fps 15
 .\PaperShade.exe --pixel-size 1
+.\PaperShade.exe --kelvin 3500
+.\PaperShade.exe --warmth-only
+.\PaperShade.exe --warmth
 .\PaperShade.exe --quit
 .\PaperShade.exe --safe
 .\PaperShade.exe --reset-settings

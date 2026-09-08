@@ -8,11 +8,12 @@ final class CoreContractTests: XCTestCase {
     private let bayer: [Int32] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]
 
     func testPresetIdentifiersAndEveryABIOffset() {
-        XCTAssertEqual(PSPresetCount(), 12)
-        XCTAssertEqual(Preset.allCases.map(\.rawValue), Array(Int32(0)...Int32(11)))
+        XCTAssertEqual(PSPresetCount(), 13)
+        XCTAssertEqual(Preset.allCases.map(\.rawValue), Array(Int32(0)...Int32(12)))
         XCTAssertEqual(Preset.ps1Color.rawValue, 11)
-        XCTAssertEqual(MemoryLayout<PSFilterParameters>.size, 48)
-        XCTAssertEqual(MemoryLayout<PSFilterParameters>.stride, 48)
+        XCTAssertEqual(Preset.original.rawValue, 12)
+        XCTAssertEqual(MemoryLayout<PSFilterParameters>.size, 64)
+        XCTAssertEqual(MemoryLayout<PSFilterParameters>.stride, 64)
         XCTAssertEqual(MemoryLayout<PSPixel>.size, 4)
         let offsets = [
             MemoryLayout<PSFilterParameters>.offset(of: \.red),
@@ -26,9 +27,13 @@ final class CoreContractTests: XCTestCase {
             MemoryLayout<PSFilterParameters>.offset(of: \.color),
             MemoryLayout<PSFilterParameters>.offset(of: \.padding0),
             MemoryLayout<PSFilterParameters>.offset(of: \.padding1),
-            MemoryLayout<PSFilterParameters>.offset(of: \.padding2)
+            MemoryLayout<PSFilterParameters>.offset(of: \.padding2),
+            MemoryLayout<PSFilterParameters>.offset(of: \.warmthRed),
+            MemoryLayout<PSFilterParameters>.offset(of: \.warmthGreen),
+            MemoryLayout<PSFilterParameters>.offset(of: \.warmthBlue),
+            MemoryLayout<PSFilterParameters>.offset(of: \.warmthPadding)
         ]
-        XCTAssertEqual(offsets, stride(from: 0, through: 44, by: 4).map { Optional($0) })
+        XCTAssertEqual(offsets, stride(from: 0, through: 60, by: 4).map { Optional($0) })
     }
 
     func testAllPresetParametersAndScales() throws {
@@ -44,7 +49,8 @@ final class CoreContractTests: XCTestCase {
             (0.2126, 0.7152, 0.0722, 1, 0, 2, 4, 0),
             (0.2126, 0.7152, 0.0722, 1, 0, 2, 16, 0),
             (0.2126, 0.7152, 0.0722, 1, 0, 3, 32, 0),
-            (0.2126, 0.7152, 0.0722, 1, 0, 3, 32, 1)
+            (0.2126, 0.7152, 0.0722, 1, 0, 3, 32, 1),
+            (0.2126, 0.7152, 0.0722, 1, 0, 0, 256, 1)
         ]
         for preset in Preset.allCases {
             for scale in FilterSettings.patternSizes {
@@ -60,6 +66,12 @@ final class CoreContractTests: XCTestCase {
                 XCTAssertEqual(actual.color, e.7)
                 XCTAssertEqual(actual.pixelSize, Int32(scale))
                 XCTAssertEqual([actual.padding0, actual.padding1, actual.padding2], [0, 0, 0])
+                XCTAssertEqual([actual.warmthRed, actual.warmthGreen, actual.warmthBlue, actual.warmthPadding], [1, 1, 1, 0])
+                let explicitNeutral = try CoreParameters.make(preset: preset, pixelSize: scale, temperatureKelvin: 6500)
+                var legacy = PSFilterParameters()
+                XCTAssertEqual(PSGetFilterParameters(preset.rawValue, Int32(scale), &legacy), 1)
+                XCTAssertEqual(bytes(of: actual), bytes(of: explicitNeutral))
+                XCTAssertEqual(bytes(of: actual), bytes(of: legacy))
             }
         }
     }
@@ -67,17 +79,29 @@ final class CoreContractTests: XCTestCase {
     func testInvalidCInputsAreRejectedWithoutWritingOutput() throws {
         var parameters = try CoreParameters.make(preset: .paper, pixelSize: 2)
         let original = bytes(of: parameters)
-        for preset in [Int32.min, -1, 12, Int32.max] {
+        for preset in [Int32.min, -1, 13, Int32.max] {
             XCTAssertEqual(PSGetFilterParameters(preset, 1, &parameters), 0)
+            XCTAssertEqual(bytes(of: parameters), original)
+            XCTAssertEqual(PSGetWarmFilterParameters(preset, 1, 3500, &parameters), 0)
             XCTAssertEqual(bytes(of: parameters), original)
         }
         for scale in [Int32.min, -1, 0, 5, Int32.max] {
             XCTAssertEqual(PSGetFilterParameters(0, scale, &parameters), 0)
             XCTAssertEqual(bytes(of: parameters), original)
+            XCTAssertEqual(PSGetWarmFilterParameters(0, scale, 3500, &parameters), 0)
+            XCTAssertEqual(bytes(of: parameters), original)
+        }
+        for kelvin in [Int32.min, -1, 0, 999, 6501, Int32.max] {
+            XCTAssertEqual(PSGetWarmFilterParameters(0, 1, kelvin, &parameters), 0)
+            XCTAssertEqual(bytes(of: parameters), original)
         }
         XCTAssertEqual(PSGetFilterParameters(0, 1, nil), 0)
+        XCTAssertEqual(PSGetWarmFilterParameters(0, 1, 3500, nil), 0)
         XCTAssertThrowsError(try CoreParameters.make(preset: .natural, pixelSize: 0))
         XCTAssertThrowsError(try CoreParameters.make(preset: .natural, pixelSize: Int.max))
+        for kelvin in [Int.min, -1, 999, 6501, Int.max] {
+            XCTAssertThrowsError(try CoreParameters.make(preset: .original, pixelSize: 1, temperatureKelvin: kelvin))
+        }
         let input = PSPixel(red: 1, green: 2, blue: 3, alpha: 4)
         var output = PSPixel(red: 11, green: 12, blue: 13, alpha: 14)
         let sentinel = bytes(of: output)
@@ -96,6 +120,98 @@ final class CoreContractTests: XCTestCase {
             corrupt(&invalid)
             XCTAssertEqual(PSReferencePixel(input, 0, 0, &invalid, &output), 0)
             XCTAssertEqual(bytes(of: output), sentinel)
+        }
+        let warmthFields: [WritableKeyPath<PSFilterParameters, Float>] = [\.warmthRed, \.warmthGreen, \.warmthBlue]
+        for field in warmthFields {
+            for value in [Float.nan, .infinity, -.infinity, -0.01, 1.01] {
+                var invalid = parameters
+                invalid[keyPath: field] = value
+                XCTAssertEqual(PSReferencePixel(input, 0, 0, &invalid, &output), 0)
+                XCTAssertEqual(bytes(of: output), sentinel)
+            }
+        }
+    }
+
+    func testWarmParametersLeaveBaseParametersUnchanged() throws {
+        for preset in Preset.allCases {
+            for scale in FilterSettings.patternSizes {
+                let neutral = try CoreParameters.make(preset: preset, pixelSize: scale)
+                for kelvin in [1000, 1200, 2700, 4500, 6499, 6500] {
+                    let warm = try CoreParameters.make(preset: preset, pixelSize: scale, temperatureKelvin: kelvin)
+                    // The old 48 bytes remain intact; Kelvin gains belong only in the appended register.
+                    XCTAssertEqual(Array(bytes(of: warm).prefix(48)), Array(bytes(of: neutral).prefix(48)))
+                    XCTAssertEqual(warm.warmthPadding, 0)
+                    for gain in [warm.warmthRed, warm.warmthGreen, warm.warmthBlue] {
+                        XCTAssertTrue(gain.isFinite)
+                        XCTAssertTrue((0...1).contains(gain))
+                    }
+                    XCTAssertEqual(warm.warmthRed, 1)
+                    if kelvin < 6500 {
+                        XCTAssertGreaterThan(warm.warmthRed, warm.warmthGreen)
+                        XCTAssertGreaterThan(warm.warmthGreen, warm.warmthBlue)
+                    }
+                }
+            }
+        }
+    }
+
+    func testOriginalNeutralIdentityAndWarmWhite() throws {
+        var neutral = try CoreParameters.make(preset: .original, pixelSize: 1)
+        for input in [
+            PSPixel(red: 128, green: 5, blue: 255, alpha: 0),
+            PSPixel(red: 0, green: 0, blue: 0, alpha: 1),
+            PSPixel(red: 255, green: 255, blue: 255, alpha: 127)
+        ] {
+            XCTAssertEqual(bytes(of: try reference(input, x: 0, y: 0, parameters: &neutral)),
+                           [input.red, input.green, input.blue, 255])
+        }
+        let white = PSPixel(red: 255, green: 255, blue: 255, alpha: 0)
+        for kelvin in [1000, 1200, 2700, 4500] {
+            var warm = try CoreParameters.make(preset: .original, pixelSize: 1, temperatureKelvin: kelvin)
+            let result = try reference(white, x: 0, y: 0, parameters: &warm)
+            XCTAssertEqual(result.red, 255)
+            XCTAssertGreaterThan(result.red, result.green)
+            XCTAssertGreaterThan(result.green, result.blue)
+            XCTAssertEqual(result.alpha, 255)
+            let black = PSPixel(red: 0, green: 0, blue: 0, alpha: 0)
+            XCTAssertEqual(bytes(of: try reference(black, x: 0, y: 0, parameters: &warm)), [0, 0, 0, 255])
+        }
+    }
+
+    func testWarmthAttenuatesAfterPaletteAndPS1Quantization() throws {
+        let inputs = [
+            PSPixel(red: 128, green: 5, blue: 255, alpha: 0),
+            PSPixel(red: 255, green: 255, blue: 255, alpha: 1),
+            PSPixel(red: 127, green: 128, blue: 129, alpha: 7),
+            PSPixel(red: 0, green: 0, blue: 0, alpha: 255)
+        ]
+        for preset in Preset.allCases {
+            for scale in FilterSettings.patternSizes {
+                var neutral = try CoreParameters.make(preset: preset, pixelSize: scale)
+                for kelvin in [4500, 2700, 1200] {
+                    var warm = try CoreParameters.make(preset: preset, pixelSize: scale, temperatureKelvin: kelvin)
+                    for phase in 0..<16 {
+                        for input in inputs {
+                            let x = (phase & 3) * scale
+                            let y = (phase >> 2) * scale
+                            let plain = try reference(input, x: x, y: y, parameters: &neutral)
+                            let tinted = try reference(input, x: x, y: y, parameters: &warm)
+                            XCTAssertEqual(tinted.alpha, 255)
+                            XCTAssertEqual(tinted.red, plain.red)
+                            XCTAssertLessThanOrEqual(tinted.green, plain.green)
+                            XCTAssertLessThanOrEqual(tinted.blue, plain.blue)
+                            if neutral.quantizer != 0 || preset == .original {
+                                let gains = [warm.warmthRed, warm.warmthGreen, warm.warmthBlue]
+                                let expected = zip([plain.red, plain.green, plain.blue], gains).map { channel, gain in
+                                    UInt8(floor((Float(channel) / 255) * gain * 255 + 0.5))
+                                }
+                                XCTAssertEqual([tinted.red, tinted.green, tinted.blue], expected,
+                                               "Warmth must follow quantization: \(preset), \(kelvin) K, phase \(phase)")
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -166,6 +282,10 @@ final class CoreContractTests: XCTestCase {
                             }
                             guard [actual.red, actual.green, actual.blue] == expected else {
                                 return XCTFail("PS1 integer mismatch: \(scale), \(phase), \(value)")
+                            }
+                        } else if preset == .original {
+                            guard [actual.red, actual.green, actual.blue] == [input.red, input.green, input.blue] else {
+                                return XCTFail("Neutral Original changed source colors")
                             }
                         } else {
                             guard actual.red == actual.green, actual.green == actual.blue else {

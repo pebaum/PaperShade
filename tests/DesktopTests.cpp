@@ -171,12 +171,29 @@ int wmain(int argc, wchar_t** argv) {
             return 42;
         }
         const bool captureOnly = argc == 2 && std::wstring(argv[1]) == L"--capture-only";
-        if (!captureOnly && (argc != 2 || std::wstring(argv[1]) != L"--exercise")) {
-            std::cout << "Use --exercise for desktop/recovery checks or --capture-only for borderless capture checks. "
+        const bool warmthOnly = argc == 2 && std::wstring(argv[1]) == L"--warmth-only";
+        if (!captureOnly && !warmthOnly && (argc != 2 || std::wstring(argv[1]) != L"--exercise")) {
+            std::cout << "Use --exercise, --capture-only, or --warmth-only for the corresponding live desktop checks. "
                          "This is opt-in and is not part of automatic CTest runs.\n";
             return 2;
         }
         const auto original = SnapshotColors();
+        if (warmthOnly) {
+            paper::ColorEffect effect;
+            for (const auto preset : {paper::Preset::Original, paper::Preset::Natural}) {
+                effect.Apply(preset, 3500);
+                MAGCOLOREFFECT expected{}, actual{};
+                const auto matrix = paper::ColorMatrix(preset, 3500);
+                std::memcpy(&expected, matrix.data(), sizeof(expected));
+                paper::CheckWin32(MagGetFullscreenColorEffect(&actual), L"Cannot read the applied warm matrix.");
+                Require(Same(expected, actual), "The compositor did not retain the Kelvin matrix.");
+                Sleep(500);
+            }
+            effect.Restore();
+            Require(Same(SnapshotColors(), original), "Warmth pause did not restore the starting transform.");
+            std::cout << "Native 3500 K original-color/grayscale matrices and restoration passed.\n";
+            return 0;
+        }
         if (!captureOnly) {
             paper::ColorEffect effect;
             effect.Apply(paper::Preset::Natural);

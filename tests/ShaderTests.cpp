@@ -58,8 +58,11 @@ int main(int argc, char** argv) {
         winrt::check_hresult(device->CreateTexture2D(&desc, nullptr, staging.put()));
         std::uint64_t checked = 0;
         for (unsigned preset = 0; preset < static_cast<unsigned>(paper::Preset::Count); ++preset) {
-            for (unsigned size = 1; size <= 4; ++size) {
-                const auto constants = paper::Constants(static_cast<paper::Preset>(preset), size);
+            for (unsigned variant = 0; variant < 16; ++variant) {
+                const unsigned size = variant % 4 + 1;
+                constexpr std::array<unsigned, 4> temperatures{6500, 4500, 2700, 1200};
+                const unsigned kelvin = temperatures[variant / 4];
+                const auto constants = paper::Constants(static_cast<paper::Preset>(preset), size, kelvin);
                 renderer.Draw(context.get(), source.get(), destination.get(), width, height, constants);
                 context->CopyResource(staging.get(), output.get());
                 D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -73,9 +76,9 @@ int main(int argc, char** argv) {
                             {inputPixel[0], inputPixel[1], inputPixel[2]}, x, y, constants);
                         for (UINT channel = 0; channel < 3; ++channel) {
                             const int actual = row[x * 4 + 2 - channel];
-                            const int tolerance = constants.quantizer == 3 ? 0 : 1;
+                            const int tolerance = constants.quantizer == 3 && kelvin == paper::NeutralKelvin ? 0 : 1;
                             if (std::abs(actual - expected[channel]) > tolerance || row[x * 4 + 3] != 255) {
-                                std::cerr << "Shader mismatch: preset=" << preset << " scale=" << size
+                                std::cerr << "Shader mismatch: preset=" << preset << " scale=" << size << " kelvin=" << kelvin
                                     << " x=" << x << " y=" << y << " channel=" << channel
                                     << " expected=" << static_cast<int>(expected[channel])
                                     << " actual=" << actual << '\n';
@@ -92,7 +95,7 @@ int main(int argc, char** argv) {
             }
         }
         std::cout << "GPU shader matched CPU reference for " << checked
-                  << " pixels across every preset and pattern scale.\n";
+                  << " pixels across every preset, pattern scale, and Kelvin variant.\n";
         return 0;
     } catch (const winrt::hresult_error& error) {
         std::cerr << winrt::to_string(error.message()) << '\n';

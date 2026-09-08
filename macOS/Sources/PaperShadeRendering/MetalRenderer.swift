@@ -83,7 +83,12 @@ public final class MetalRenderer {
         guard (1...4).contains(parameters.pixelSize),
               (0...3).contains(parameters.quantizer), (2...256).contains(parameters.levels),
               parameters.color == 0 || parameters.color == 1,
-              MemoryLayout<PSFilterParameters>.size == 48 else {
+              parameters.warmthRed.isFinite, parameters.warmthGreen.isFinite, parameters.warmthBlue.isFinite,
+              (0...1).contains(parameters.warmthRed),
+              (0...1).contains(parameters.warmthGreen),
+              (0...1).contains(parameters.warmthBlue),
+              MemoryLayout<PSFilterParameters>.size == 64,
+              MemoryLayout<PSFilterParameters>.stride == 64 else {
             throw RenderingError("Invalid Metal filter parameters.")
         }
         let pass = MTLRenderPassDescriptor()
@@ -110,14 +115,15 @@ public final class MetalRenderer {
         using namespace metal;
         #pragma clang fp contract(off)
 
-        // Scalar members preserve the 48-byte C/HLSL ABI; float3 would not.
+        // Scalar members preserve the 64-byte C/HLSL ABI; float3 would not.
         struct FilterParameters {
             float red, green, blue, gain;
             float offset;
             int quantizer, levels, pixelSize;
             int color, padding0, padding1, padding2;
+            float warmthRed, warmthGreen, warmthBlue, warmthPadding;
         };
-        static_assert(sizeof(FilterParameters) == 48, "Filter parameter ABI mismatch");
+        static_assert(sizeof(FilterParameters) == 64, "Filter parameter ABI mismatch");
         constant int ps1[16] = {\(ps1)};
         constant int bayer[16] = {\(bayer)};
 
@@ -143,7 +149,7 @@ public final class MetalRenderer {
                 int3 bytes = int3(floor(clamp(color, 0.0f, 1.0f) * 255.0f + 0.5f));
                 int3 rgb5 = clamp(bytes + ps1[index], 0, 255) >> 3;
                 int3 rgb8 = (rgb5 << 3) | (rgb5 >> 2);
-                return float4(float3(rgb8) / 255.0f, 1.0f);
+                color = float3(rgb8) / 255.0f;
             }
             if (p.quantizer == 1 || p.quantizer == 2) {
                 float threshold = p.quantizer == 2
@@ -151,7 +157,7 @@ public final class MetalRenderer {
                 float steps = float(p.levels - 1);
                 color = clamp(floor(color * steps + 0.5f + threshold) / steps, 0.0f, 1.0f);
             }
-            return float4(color, 1.0f);
+            return float4(color * float3(p.warmthRed, p.warmthGreen, p.warmthBlue), 1.0f);
         }
         """
     }
