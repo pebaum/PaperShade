@@ -9,12 +9,12 @@ PaperShade lives quietly in the Windows system tray or Mac menu bar.
 
 | Your computer | Click to download |
 | --- | --- |
-| Most Windows 11 PCs (Intel / AMD) | **[Download for Windows (.exe)](https://github.com/pebaum/PaperShade/releases/download/v1.1.0/PaperShade-1.1.0-windows-x64.exe)** |
-| Windows 11 ARM PCs (Snapdragon) | **[Download for Windows ARM64 (.exe)](https://github.com/pebaum/PaperShade/releases/download/v1.1.0/PaperShade-1.1.0-windows-arm64.exe)** |
-| Mac, macOS 13+ (Intel or Apple silicon) | **[Download for Mac (.dmg)](https://github.com/pebaum/PaperShade/releases/download/v1.1.0/PaperShade-1.1.0-macos-universal.dmg)** |
+| Most Windows 11 PCs (Intel / AMD) | **[Download for Windows (.exe)](https://github.com/pebaum/PaperShade/releases/download/v1.2.0/PaperShade-1.2.0-windows-x64.exe)** |
+| Windows 11 ARM PCs (Snapdragon) | **[Download for Windows ARM64 (.exe)](https://github.com/pebaum/PaperShade/releases/download/v1.2.0/PaperShade-1.2.0-windows-arm64.exe)** |
+| Mac, macOS 13+ (Intel or Apple silicon) | **[Download for Mac (.dmg)](https://github.com/pebaum/PaperShade/releases/download/v1.2.0/PaperShade-1.2.0-macos-universal.dmg)** |
 
 The Mac download works on both Intel and M-series Macs.
-[All downloads and release notes](https://github.com/pebaum/PaperShade/releases/tag/v1.1.0)
+[All downloads and release notes](https://github.com/pebaum/PaperShade/releases/tag/v1.2.0)
 
 ## Get started
 
@@ -38,9 +38,17 @@ system's security protections.
 | Toggle the filter | Ctrl+Alt+G | Control+Option+G |
 | Always pause | Ctrl+Alt+Shift+G | Control+Option+Shift+G |
 
-Choose from 12 styles, including traditional grayscale, paper-like contrast,
+Choose from 13 styles, including original colors, traditional grayscale, paper-like contrast,
 2/4/16-shade e-ink, and PS1 dithering. Frame rate and dither size are adjustable.
 Exit from the tray/menu-bar icon to restore the normal display.
+
+## Warmth (Kelvin)
+
+Use **Warmth (Kelvin)** to choose **1000-6500 K** or enter a custom value.
+Lower values look warmer; **6500 K is neutral / off**.
+Choose **Warmth only (original colors)** for f.lux-style warming without grayscale,
+or combine warmth with another style. This is manual, approximate color warming,
+not automatic sunset scheduling or monitor calibration.
 
 Processing stays on your computer: no recordings are saved or uploaded.
 GPU effects use some power. macOS keeps its recording indicator, and its
