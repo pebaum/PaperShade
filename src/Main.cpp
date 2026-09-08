@@ -4,6 +4,10 @@
 #include "WinUtil.h"
 #include "AppVersion.h"
 #include "WarmthDialog.h"
+#include "DisplayRecovery.h"
+#include <dbt.h>
+#include <initguid.h>
+#include <ntddvdeo.h>
 #include <shellapi.h>
 #include <wtsapi32.h>
 #include <powrprof.h>
@@ -15,6 +19,8 @@
 #include <iterator>
 #include <memory>
 #include <sstream>
+#include <deque>
+#include <utility>
 
 namespace paper {
 namespace {
@@ -23,6 +29,7 @@ constexpr wchar_t WindowClass[] = L"PaperShade.TrayHost";
 constexpr UINT TrayMessage = WM_APP + 1;
 constexpr UINT CommandMessage = WM_APP + 2;
 constexpr UINT QueryMessage = WM_APP + 3;
+constexpr UINT DeferredWorkMessage = WM_APP + 4;
 constexpr UINT_PTR RestartTimer = 1;
 constexpr UINT Toggle = 100;
 constexpr UINT Pause = 101;
@@ -93,8 +100,12 @@ class App {
 public:
     explicit App(Settings settings) : settings_(settings) {}
     ~App() {
+        closing_ = true;
+        engineBusy_ = true;
         capture_.Stop();
         if (power_) UnregisterPowerSettingNotification(power_);
+        if (monitorNotifications_) UnregisterDeviceNotification(monitorNotifications_);
+        if (adapterNotifications_) UnregisterDeviceNotification(adapterNotifications_);
         if (hwnd_) {
             UnregisterHotKey(hwnd_, ToggleHotkey);
             UnregisterHotKey(hwnd_, PanicHotkey);
@@ -119,6 +130,9 @@ public:
         hwnd_ = CreateWindowExW(WS_EX_TOOLWINDOW, WindowClass, L"PaperShade",
             WS_POPUP, 0, 0, 0, 0, nullptr, nullptr, instance, this);
         CheckWin32(hwnd_ != nullptr, L"Cannot create the tray host.");
+#ifdef PAPERSHADE_APP_TESTS
+        if (testing_) return;
+#endif
         onIcon_ = CreateTrayIcon(true);
         offIcon_ = CreateTrayIcon(false);
         taskbarCreated_ = RegisterWindowMessageW(L"TaskbarCreated");
@@ -134,10 +148,21 @@ public:
             L"Cannot subscribe to Windows session-lock notifications.");
         power_ = RegisterPowerSettingNotification(hwnd_, &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE);
         CheckWin32(power_ != nullptr, L"Cannot subscribe to display power notifications.");
+        DEV_BROADCAST_DEVICEINTERFACE_W deviceFilter{};
+        deviceFilter.dbcc_size = sizeof(deviceFilter);
+        deviceFilter.dbcc_devicetype = DBT_DEVTYP_DEVICEINTERFACE;
+        deviceFilter.dbcc_classguid = GUID_DEVINTERFACE_MONITOR;
+        monitorNotifications_ = RegisterDeviceNotificationW(hwnd_, &deviceFilter, DEVICE_NOTIFY_WINDOW_HANDLE);
+        CheckWin32(monitorNotifications_ != nullptr, L"Cannot subscribe to monitor connection notifications.");
+        deviceFilter.dbcc_classguid = GUID_DEVINTERFACE_DISPLAY_ADAPTER;
+        adapterNotifications_ = RegisterDeviceNotificationW(hwnd_, &deviceFilter, DEVICE_NOTIFY_WINDOW_HANDLE);
+        CheckWin32(adapterNotifications_ != nullptr, L"Cannot subscribe to display-adapter notifications.");
+        topology_ = ReadTopology();
         Apply();
     }
 
     void Command(UINT command) {
+        if (closing_) return;
         if (command == Quit) {
             Shutdown();
             return;
@@ -182,11 +207,19 @@ public:
         } else {
             throw winrt::hresult_invalid_argument(L"Unknown PaperShade command.");
         }
-        Apply();
-        SaveSettings(settings_);
+        if (recovery_.Pending() && CanRun()) {
+            UpdateTray();
+        } else {
+            Apply();
+        }
+        PersistSettings();
     }
 
     void Fail(const std::wstring& message) noexcept {
+        EngineScope operation(*this);
+        recovery_.Cancel();
+        recoveryNeedsStop_ = false;
+        KillTimer(hwnd_, RestartTimer);
         capture_.Stop();
         ++errors_;
         settings_.enabled = false;
@@ -198,7 +231,7 @@ public:
                 L"\nExit PaperShade to let the recovery helper retry.";
         }
         try {
-            SaveSettings(settings_);
+            PersistSettings();
         } catch (const winrt::hresult_error& error) {
             detail += L"\nPreferences: " + std::wstring(error.message());
         }
@@ -210,10 +243,32 @@ public:
     HWND Window() const noexcept { return hwnd_; }
 
 private:
+    struct PendingMessage {
+        UINT message;
+        WPARAM wparam;
+        LPARAM lparam;
+    };
+
+    struct EngineScope {
+        App& app;
+        explicit EngineScope(App& owner) noexcept : app(owner) {
+            app.engineBusy_ = true;
+#ifdef PAPERSHADE_APP_TESTS
+            ++app.testEngineEntries_;
+#endif
+        }
+        ~EngineScope() {
+            app.engineBusy_ = false;
+            app.PostDeferredWork();
+        }
+    };
+
     HWND hwnd_ = nullptr;
     HICON onIcon_ = nullptr;
     HICON offIcon_ = nullptr;
     HPOWERNOTIFY power_ = nullptr;
+    HDEVNOTIFY monitorNotifications_ = nullptr;
+    HDEVNOTIFY adapterNotifications_ = nullptr;
     UINT taskbarCreated_ = 0;
     Settings settings_;
     CaptureEngine capture_;
@@ -224,13 +279,105 @@ private:
     bool closing_ = false;
     bool borderNoticeShown_ = false;
     std::uint32_t errors_ = 0;
+    bool engineBusy_ = false;
+    bool deferredPosted_ = false;
+    bool deferredFrame_ = false;
+    bool deferredCaptureTimer_ = false;
+    bool deferredFailure_ = false;
+    bool deferredBorder_ = false;
+    bool deferredRestart_ = false;
+    bool recoveryNeedsStop_ = false;
+    std::deque<PendingMessage> deferredMessages_;
+    DisplayRecovery recovery_;
+    std::array<int, 5> topology_{};
+
+#ifdef PAPERSHADE_APP_TESTS
+    bool testing_ = false;
+    unsigned testEngineEntries_ = 0;
+public:
+    void InitializeForTest(HINSTANCE instance) { testing_ = true; Initialize(instance); }
+    template<typename Callback> void TestCriticalSection(Callback callback) {
+        EngineScope operation(*this);
+        callback();
+    }
+    bool TestRecoveryPending() const { return recovery_.Pending(); }
+    unsigned TestErrors() const { return errors_; }
+    CaptureStats TestCaptureStats() const { return capture_.Stats(); }
+    unsigned TestEngineEntries() const { return testEngineEntries_; }
+private:
+#endif
+
+    static std::array<int, 5> ReadTopology() {
+        return {GetSystemMetrics(SM_CMONITORS), GetSystemMetrics(SM_XVIRTUALSCREEN),
+            GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXVIRTUALSCREEN),
+            GetSystemMetrics(SM_CYVIRTUALSCREEN)};
+    }
+
+    void PersistSettings() {
+#ifdef PAPERSHADE_APP_TESTS
+        if (testing_) return;
+#endif
+        SaveSettings(settings_);
+    }
+
+    void PostDeferredWork() noexcept {
+        if (!hwnd_ || closing_ || engineBusy_ || deferredPosted_) return;
+        if (!recoveryNeedsStop_ && !deferredRestart_ && !deferredFrame_ &&
+            !deferredCaptureTimer_ && !deferredFailure_ && !deferredBorder_ && deferredMessages_.empty()) return;
+        if (PostMessageW(hwnd_, DeferredWorkMessage, 0, 0)) {
+            deferredPosted_ = true;
+        } else {
+            Log(L"Could not post deferred display work.");
+        }
+    }
+
+    bool DeferDuringEngineCall(UINT message, WPARAM wparam, LPARAM lparam) {
+        if (!engineBusy_) return false;
+        switch (message) {
+        case DeferredWorkMessage:
+            deferredPosted_ = false;
+            return true;
+        case CaptureFrameMessage: deferredFrame_ = true; return true;
+        case CaptureFailureMessage: deferredFailure_ = true; return true;
+        case CaptureBorderMessage: deferredBorder_ = true; return true;
+        case WM_TIMER:
+            if (wparam == RestartTimer) {
+                KillTimer(hwnd_, RestartTimer);
+                deferredRestart_ = true;
+            } else if (wparam == CaptureTimer) {
+                KillTimer(hwnd_, CaptureTimer);
+                deferredCaptureTimer_ = true;
+            }
+            return true;
+        case CommandMessage:
+        case WM_HOTKEY:
+        case TrayMessage:
+        case WM_CLOSE:
+        case WM_ENDSESSION:
+            // These messages contain only scalar values. Device/power payload pointers
+            // are consumed immediately by their handlers, never retained in this queue.
+            deferredMessages_.push_back({message, wparam, lparam});
+            return true;
+        default:
+            return false;
+        }
+    }
 
     bool CanRun() const {
         return settings_.enabled && !locked_ && !displayOff_ && !suspended_ && !closing_;
     }
 
-    void Apply() {
+    bool CanRenderCapture() const {
+        return CanRun() && !recovery_.Pending() && !recovery_.Exhausted() && !recoveryNeedsStop_;
+    }
+
+    void Apply(bool recovering = false) {
+        EngineScope operation(*this);
         KillTimer(hwnd_, RestartTimer);
+        if (!recovering) {
+            recovery_.Cancel();
+            recoveryNeedsStop_ = false;
+        }
         capture_.Stop();
         if (!CanRun() || IsNeutralOriginal(settings_.preset, settings_.temperatureKelvin)) {
             color_.Restore();
@@ -244,10 +391,89 @@ private:
     }
 
     void SuspendOrResume() {
-        capture_.Stop();
-        color_.Restore();
-        UpdateTray();
-        if (CanRun()) CheckWin32(SetTimer(hwnd_, RestartTimer, 700, nullptr) != 0, L"Cannot schedule display recovery.");
+        if (closing_) return;
+        topology_ = ReadTopology();
+        recovery_.DisplayChanged(GetTickCount64());
+        recoveryNeedsStop_ = true;
+        KillTimer(hwnd_, RestartTimer);
+        PostDeferredWork();
+    }
+
+    void RetryDisplay(const std::wstring& reason) {
+        if (!CanRun()) return;
+        if (!recovery_.Retry(GetTickCount64())) {
+            EngineScope operation(*this);
+            recoveryNeedsStop_ = false;
+            KillTimer(hwnd_, RestartTimer);
+            capture_.Stop();
+            color_.Restore();
+            ++errors_;
+            Log(reason);
+            UpdateTray();
+            if (recovery_.Exhausted()) {
+                Notify(L"Waiting for the display",
+                    L"The graphics driver is not ready. Your filter preference is preserved. Reconnect the display or choose Retry display capture.");
+            }
+            return;
+        }
+        recoveryNeedsStop_ = true;
+        KillTimer(hwnd_, RestartTimer);
+        PostDeferredWork();
+    }
+
+    void ArmRecoveryTimer() {
+        if (!CanRun() || closing_) {
+            recovery_.Cancel();
+            return;
+        }
+        if (recovery_.Pending()) {
+            CheckWin32(SetTimer(hwnd_, RestartTimer, recovery_.Delay(GetTickCount64()), nullptr) != 0,
+                L"Cannot schedule display recovery.");
+        }
+    }
+
+    void RestartDisplay() {
+        KillTimer(hwnd_, RestartTimer);
+        if (!CanRun() || closing_) {
+            recovery_.Cancel();
+            return;
+        }
+        if (recoveryNeedsStop_) {
+            PostDeferredWork();
+        } else if (recovery_.Begin(GetTickCount64())) {
+            Apply(true);
+            if (!UsesCapture(settings_.preset, settings_.temperatureKelvin) && !recovery_.Pending()) {
+                recovery_.Complete();
+            }
+        } else {
+            ArmRecoveryTimer();
+        }
+    }
+
+    void DrainDeferredWork() {
+        deferredPosted_ = false;
+        auto messages = std::move(deferredMessages_);
+        deferredMessages_.clear();
+        for (const auto& message : messages) {
+            Dispatch(message.message, message.wparam, message.lparam);
+            if (closing_) return;
+        }
+        if (recoveryNeedsStop_) {
+            recoveryNeedsStop_ = false;
+            {
+                EngineScope operation(*this);
+                capture_.Stop();
+                color_.Restore();
+            }
+            UpdateTray();
+            ArmRecoveryTimer();
+        }
+        if (std::exchange(deferredRestart_, false)) RestartDisplay();
+        if (std::exchange(deferredFailure_, false)) Dispatch(CaptureFailureMessage, 0, 0);
+        if (std::exchange(deferredBorder_, false)) Dispatch(CaptureBorderMessage, 0, 0);
+        if (std::exchange(deferredCaptureTimer_, false)) Dispatch(WM_TIMER, CaptureTimer, 0);
+        if (std::exchange(deferredFrame_, false)) Dispatch(CaptureFrameMessage, 0, 0);
+        PostDeferredWork();
     }
 
     NOTIFYICONDATAW TrayData() const {
@@ -258,7 +484,9 @@ private:
         icon.uCallbackMessage = TrayMessage;
         icon.hIcon = CanRun() ? onIcon_ : offIcon_;
         const auto name = std::wstring(L"PaperShade - ") +
-            (CanRun() ? PresetNames[static_cast<std::size_t>(settings_.preset)] : L"paused") +
+            (CanRun() ? (recovery_.Exhausted() ? L"waiting for the display" :
+                recovery_.Pending() ? L"reconnecting displays" :
+                PresetNames[static_cast<std::size_t>(settings_.preset)]) : L"paused") +
             L" | " + std::to_wstring(settings_.temperatureKelvin) + L" K";
         wcsncpy_s(icon.szTip, name.c_str(), _TRUNCATE);
         return icon;
@@ -303,7 +531,9 @@ private:
             if (warmth) DestroyMenu(warmth);
             throw winrt::hresult_error(E_OUTOFMEMORY, L"Cannot open the tray menu.");
         }
-        AppendMenuW(menu, MF_STRING, Toggle, CanRun() ? L"Pause filters\tCtrl+Alt+G" : L"Enable filters\tCtrl+Alt+G");
+        AppendMenuW(menu, MF_STRING, recovery_.Exhausted() ? Enable : Toggle,
+            recovery_.Exhausted() ? L"Retry display capture" :
+            CanRun() ? L"Pause filters\tCtrl+Alt+G" : L"Enable filters\tCtrl+Alt+G");
         AppendMenuW(menu, MF_STRING, Pause, L"Emergency pause\tCtrl+Alt+Shift+G");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         for (UINT index = 0; index < PresetNames.size(); ++index) {
@@ -381,6 +611,11 @@ private:
             text << L"Engine: " << (CanRun() && !IsNeutralOriginal(settings_.preset, settings_.temperatureKelvin)
                 ? L"Windows compositor color matrix (no app render loop)" : L"idle / no color processing");
         }
+        text << L"\nReported errors: " << errors_;
+        if (recovery_.Pending()) text << L"\nDisplay recovery: waiting for the monitor layout to settle";
+        if (recovery_.Exhausted()) text << L"\nDisplay recovery: waiting for a new display event or Retry display capture";
+        const auto captureError = capture_.LastError();
+        if (!captureError.empty()) text << L"\nLast capture error: " << captureError;
         text << L"\n\nLeft-click icon: toggle. Right-click: styles and settings."
              << L"\nCtrl+Alt+Shift+G: always pause."
              << L"\n\nAdvanced filters process SDR desktop pixels locally. No recordings, network, or telemetry."
@@ -395,7 +630,10 @@ private:
     }
 
     void Shutdown() {
+        EngineScope operation(*this);
         closing_ = true;
+        recovery_.Cancel();
+        recoveryNeedsStop_ = false;
         KillTimer(hwnd_, RestartTimer);
         capture_.Stop();
         color_.Restore();
@@ -409,6 +647,9 @@ private:
             return 0;
         }
         switch (message) {
+        case DeferredWorkMessage:
+            DrainDeferredWork();
+            return 0;
         case CommandMessage:
             Command(static_cast<UINT>(wparam));
             return 1;
@@ -434,11 +675,18 @@ private:
             Command(wparam == PanicHotkey ? Pause : Toggle);
             return 0;
         case CaptureFrameMessage:
-            if (CanRun() && UsesCapture(settings_.preset, settings_.temperatureKelvin)) capture_.HandleFrame();
+            if (CanRenderCapture() && UsesCapture(settings_.preset, settings_.temperatureKelvin)) {
+                EngineScope operation(*this);
+                capture_.HandleFrame();
+                if (!recovery_.Pending() && capture_.Stats().frames > 0) recovery_.Complete();
+            }
             return 0;
         case CaptureFailureMessage: {
             const auto detail = capture_.LastError();
-            if (CanRun() && UsesCapture(settings_.preset, settings_.temperatureKelvin) && !detail.empty()) Fail(detail);
+            if (CanRun() && UsesCapture(settings_.preset, settings_.temperatureKelvin) && !detail.empty()) {
+                if (IsRecoverableDisplayError(capture_.LastFailureCode())) RetryDisplay(detail);
+                else Fail(detail);
+            }
             return 0;
         }
         case CaptureBorderMessage:
@@ -452,12 +700,33 @@ private:
             }
             return 0;
         case WM_TIMER:
-            if (wparam == RestartTimer) Apply();
-            else if (wparam == CaptureTimer && CanRun()) capture_.HandleTimer();
+            if (wparam == RestartTimer) RestartDisplay();
+            else if (wparam == CaptureTimer && CanRenderCapture()) {
+                EngineScope operation(*this);
+                capture_.HandleTimer();
+                if (!recovery_.Pending() && capture_.Stats().frames > 0) recovery_.Complete();
+            }
             return 0;
         case WM_DISPLAYCHANGE:
         case WM_DWMCOMPOSITIONCHANGED:
+        case CaptureTopologyMessage:
             SuspendOrResume();
+            return 0;
+        case WM_DEVICECHANGE:
+            if (wparam == DBT_DEVNODES_CHANGED) {
+                if (ReadTopology() != topology_) SuspendOrResume();
+            } else if ((wparam == DBT_DEVICEARRIVAL || wparam == DBT_DEVICEREMOVECOMPLETE) && lparam) {
+                const auto* header = reinterpret_cast<const DEV_BROADCAST_HDR*>(lparam);
+                if (header->dbch_devicetype == DBT_DEVTYP_DEVICEINTERFACE &&
+                    header->dbch_size >= sizeof(DEV_BROADCAST_DEVICEINTERFACE_W)) {
+                    const auto* device = reinterpret_cast<const DEV_BROADCAST_DEVICEINTERFACE_W*>(header);
+                    if (IsEqualGUID(device->dbcc_classguid, GUID_DEVINTERFACE_MONITOR) ||
+                        IsEqualGUID(device->dbcc_classguid, GUID_DEVINTERFACE_DISPLAY_ADAPTER)) SuspendOrResume();
+                }
+            }
+            return TRUE;
+        case WM_SETTINGCHANGE:
+            if (wparam == SPI_SETWORKAREA) SuspendOrResume();
             return 0;
         case WM_WTSSESSION_CHANGE:
             if (wparam == WTS_SESSION_LOCK || wparam == WTS_SESSION_UNLOCK) {
@@ -503,9 +772,13 @@ private:
         }
         if (!app) return DefWindowProcW(window, message, wparam, lparam);
         try {
+            if (app->DeferDuringEngineCall(message, wparam, lparam)) {
+                return message == CommandMessage ? 1 : 0;
+            }
             return app->Dispatch(message, wparam, lparam);
         } catch (const winrt::hresult_error& error) {
-            app->Fail(error.message().c_str());
+            if (IsRecoverableDisplayError(error.code()) && app->CanRun()) app->RetryDisplay(error.message().c_str());
+            else app->Fail(error.message().c_str());
         } catch (const std::exception& error) {
             app->Fail(winrt::to_hstring(error.what()).c_str());
         }
@@ -553,6 +826,7 @@ UINT ParseCommand(int argc, wchar_t** argv) {
 }
 }
 
+#ifndef PAPERSHADE_APP_TESTS
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     using namespace paper;
     try {
@@ -619,3 +893,4 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         return 1;
     }
 }
+#endif

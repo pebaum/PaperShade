@@ -87,6 +87,11 @@ if(BUILD_TESTING)
     endif()
     add_executable(DesktopTests tests/DesktopTests.cpp src/ColorEffect.cpp src/CaptureEngine.cpp)
     target_link_libraries(DesktopTests PRIVATE papershade_gpu windowsapp dcomp dwmapi Magnification)
+    add_executable(DisplayRecoveryTests tests/DisplayRecoveryTests.cpp
+        src/Settings.cpp src/ColorEffect.cpp src/CaptureEngine.cpp src/WarmthDialog.cpp)
+    target_link_libraries(DisplayRecoveryTests PRIVATE papershade_gpu
+        windowsapp dcomp dwmapi Magnification shell32 advapi32 wtsapi32 powrprof uuid comctl32)
+    add_test(NAME display-recovery COMMAND DisplayRecoveryTests)
 endif()
 
 install(TARGETS PaperShade RUNTIME DESTINATION .)

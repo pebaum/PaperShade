@@ -8,9 +8,12 @@
 
 namespace paper {
 
+bool IsRecoverableDisplayError(HRESULT code) noexcept;
+
 inline constexpr UINT CaptureFrameMessage = WM_APP + 10;
 inline constexpr UINT CaptureFailureMessage = WM_APP + 11;
 inline constexpr UINT CaptureBorderMessage = WM_APP + 12;
+inline constexpr UINT CaptureTopologyMessage = WM_APP + 13;
 inline constexpr UINT_PTR CaptureTimer = 20;
 
 enum class CaptureBorderState { CheckingPermission, Borderless, RequiredByWindows, VisibleByChoice };
@@ -38,6 +41,7 @@ public:
     void HandleTimer();
     CaptureStats Stats() const;
     std::wstring LastError() const;
+    HRESULT LastFailureCode() const noexcept;
 
 private:
     struct Impl;

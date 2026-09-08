@@ -223,9 +223,20 @@ and is not a claim about the console's analog output.
 - Pause/exit restore the pre-existing color transform. A waiting helper also
   attempts restoration after abnormal termination. It does not overwrite a
   different transform subsequently installed by another app.
-- Capture errors remove the overlays and pause the app instead of leaving a
+- Unrecoverable capture errors remove the overlays and pause the app instead of leaving a
   frozen picture over the desktop. The emergency hotkey is registered before
   any effect is enabled.
+- Windows display/DPI/device notifications queue recovery rather than closing
+  capture inside the notification callback. Graphics operations defer reentrant
+  commands and frame/timer messages until their outer call has completed. This
+  avoids recursively closing a GraphicsCapture object while its COM call pumps
+  another display-change message.
+- Monitor-change bursts are coalesced for 700 ms before rebuilding all outputs.
+  Transient topology/device-loss failures retain the enabled preference and have
+  a bounded retry budget. After that budget, recovery waits for a new display
+  event or **Retry display capture**, without discarding the enabled preference.
+  Permission denial, unsupported displays, and user-closed
+  capture do not silently restart. Pause and Quit cancel pending recovery.
 
 ## Build on Windows
 
@@ -260,6 +271,11 @@ then restores the original colors. It is deliberately not run by CTest.
 `DesktopTests.exe --capture-only` targets borderless permission, live capture,
 the visible-border preference, and cancellation while permission is pending.
 `DesktopTests.exe --warmth-only` checks real compositor warming and restoration.
+`DisplayRecoveryTests` runs deterministic reentrant-message, debounce, retry,
+and pause/quit-cancellation checks without changing the user's preferences.
+`DisplayRecoveryTests.exe --live` additionally cycles real capture through
+monitor-change message storms on the currently connected displays; it does not
+physically disconnect or reconfigure the monitors.
 
 After both Release builds are complete, `tools\Package.ps1` produces standalone
 ARM64/x64 executables, portable ZIPs, and a source ZIP in `dist`.
