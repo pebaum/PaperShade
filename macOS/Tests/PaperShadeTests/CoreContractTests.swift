@@ -201,9 +201,14 @@ final class CoreContractTests: XCTestCase {
                             XCTAssertLessThanOrEqual(tinted.green, plain.green)
                             XCTAssertLessThanOrEqual(tinted.blue, plain.blue)
                             if neutral.quantizer != 0 || preset == .original {
-                                let gains = [warm.warmthRed, warm.warmthGreen, warm.warmthBlue]
-                                let expected = zip([plain.red, plain.green, plain.blue], gains).map { channel, gain in
-                                    UInt8(floor((Float(channel) / 255) * gain * 255 + 0.5))
+                                let gains: [Float] = [warm.warmthRed, warm.warmthGreen, warm.warmthBlue]
+                                let channels: [UInt8] = [plain.red, plain.green, plain.blue]
+                                var expected: [UInt8] = []
+                                for channel in 0..<3 {
+                                    let normalized: Float = Float(channels[channel]) / 255.0
+                                    let attenuated: Float = normalized * gains[channel]
+                                    let rounded: Float = (attenuated * 255.0 + 0.5).rounded(.down)
+                                    expected.append(UInt8(rounded))
                                 }
                                 XCTAssertEqual([tinted.red, tinted.green, tinted.blue], expected,
                                                "Warmth must follow quantization: \(preset), \(kelvin) K, phase \(phase)")
